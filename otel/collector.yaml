@@ -1,0 +1,45 @@
+# Dual export to lgtm + phoenix. NO filter processor — see ARCHITECTURE.md §3.1: dropping a
+# span that is a parent orphans its children, and Phoenix needs the whole call tree, not just
+# openinference-tagged spans. Send whole traces to both sinks.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 75
+    spike_limit_percentage: 15
+  batch:
+    timeout: 2s
+    send_batch_size: 512
+
+exporters:
+  otlp/lgtm:
+    endpoint: otel-lgtm:4317
+    tls:
+      insecure: true
+  otlp/phoenix:
+    endpoint: phoenix:4317
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/lgtm, otlp/phoenix]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/lgtm]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/lgtm]

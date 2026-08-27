@@ -1,0 +1,10 @@
+# BO-00 stub. BO-06 replaces this with the real model_list, fallbacks and rpm/tpm caps.
+# Exists only so the container has a file to mount and can reach healthy.
+model_list:
+  - model_name: placeholder
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: sk-placeholder-not-used
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

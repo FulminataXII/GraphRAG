@@ -1,0 +1,57 @@
+# Observability plane. `docker compose --profile core --profile obs up -d`.
+# Dropping this file (i.e. omitting --profile obs) is the low-memory mode — there is no
+# separate `lite` profile; core-only IS lite mode. Saves ~2GB of RAM.
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.160.0
+    profiles: [obs]
+    command: ["--config=/etc/otel/collector.yaml"]
+    volumes:
+      - ./otel/collector.yaml:/etc/otel/collector.yaml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    mem_limit: 512m
+    depends_on:
+      otel-lgtm:
+        condition: service_started
+      phoenix:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/4318'"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  otel-lgtm:
+    image: grafana/otel-lgtm:latest
+    profiles: [obs]
+    ports:
+      - "3000:3000"
+    mem_limit: 1.5g
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3000 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    profiles: [obs]
+    ports:
+      - "6006:6006"
+    environment:
+      PHOENIX_SQL_DATABASE_URL: ${POSTGRES_DSN}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:6006 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s

@@ -1,0 +1,22 @@
+# Test-environment overrides (APP_ENV=test). Deep-merged onto base.yaml.
+# Goal: deterministic, network-free unit tests — no telemetry export, no caching (a cached
+# result would make the second run of a test assert against the cache instead of the system).
+
+app:
+  debug: true
+
+cache:
+  embedding: { enabled: false, ttl_s: 2592000, prefix: "emb:" }
+  retrieval: { enabled: false, ttl_s: 900, prefix: "ret:" }
+  llm: { enabled: false, ttl_s: 3600, semantic: false }
+
+observability:
+  traces:
+    enabled: false
+    record_prompts: false
+  metrics:
+    enabled: false
+  phoenix:
+    enabled: false
+  trail:
+    enabled: false

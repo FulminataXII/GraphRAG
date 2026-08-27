@@ -1,0 +1,275 @@
+# =============================================================================
+# config/base.yaml — the single source of truth for every tunable parameter.
+#
+# Rules:
+#   * NO secrets in this file. Secrets live in .env as SecretStr fields (config/schema.py
+#     SecretsSection), loaded under the `secrets` key via GRAPHRAG_SECRETS__* env vars.
+#   * Loaded by config/settings.py with extra="forbid": an unknown key here crashes startup.
+#   * Overridden per-environment by config/{local,prod}.yaml (partial, deep-merged — see
+#     LayeredYamlSource). Values here lean toward the SAFE/prod-conservative defaults;
+#     config/local.yaml relaxes them for developer convenience.
+#   * Override any leaf at runtime with env vars using the nested delimiter, e.g.
+#       GRAPHRAG_RETRIEVAL__VECTOR__TOP_K=99
+#   * sha256 of this resolved tree (minus secrets) becomes `config_hash`.
+# =============================================================================
+
+app:
+  name: graphrag
+  readyz_cache_s: 5
+  readyz_probe_timeout_ms: 2000
+  env: local
+  version: "0.1.0"
+  debug: false
+  host: 0.0.0.0
+  port: 8000
+  workers: 1
+  request_timeout_s: 60
+  cors_origins: []
+
+limits:
+  max_query_chars: 2000
+  max_upload_mb: 25
+  allowed_upload_mimetypes:
+    - application/pdf
+    - text/plain
+    - text/markdown
+    - application/vnd.openxmlformats-officedocument.wordprocessingml.document
+  rate_limit:
+    query_per_minute: 30
+    ingest_per_minute: 5
+    burst_multiplier: 2
+  per_request_budget:
+    max_llm_calls: 12
+    max_wall_ms: 45000
+    max_prompt_tokens: 24000
+
+ingestion:
+  chunk_size: 900
+  chunk_overlap: 150
+  min_chunk_chars: 80
+  normalizer:
+    unicode_form: NFKC
+    casefold_for_hash: true
+    strip_zero_width: true
+  parallelism:
+    max_concurrent_docs: 4
+    max_concurrent_chunks: 32
+  payload_projection:
+    queue_name: projection
+    max_jobs: 1
+    batch_size: 200
+    batch_linger_ms: 500
+  dead_letter:
+    max_attempts: 3
+    backoff_base_s: 2
+    backoff_max_s: 60
+
+embedding:
+  dense:
+    model: BAAI/bge-small-en-v1.5
+    dimensions: 384
+    batch_size: 64
+    query_prefix: "Represent this sentence for searching relevant passages: "
+  sparse:
+    model: Qdrant/bm25
+    enabled: true
+    idf_modifier: true
+
+retrieval:
+  vector:
+    collection: chunks
+    top_k: 20
+    prefetch_limit: 50
+    score_threshold: null
+    timeout_ms: 2000
+  graph:
+    max_hops: 2
+    max_paths: 40
+    max_degree_per_hop: 25
+    hydrate_from: neo4j
+    entity_link_top_k: 5
+    entity_link_min_score: 0.72
+    timeout_ms: 3000
+    templates_enabled:
+      - neighbors
+      - path_between
+      - entities_by_relation
+      - co_mentioned
+      - top_entities_for_chunks
+    text2cypher_enabled: false
+  fusion:
+    method: rrf
+    rrf_k: 60
+    weights: { vector: 1.0, graph: 1.0 }
+    final_top_k: 10
+  rerank:
+    enabled: false
+    model: BAAI/bge-reranker-base
+    top_n: 5
+
+resolution:
+  collection: entities
+  block_k: 25
+  scorer_weights:
+    jaro_winkler: 0.30
+    token_set_ratio: 0.30
+    embedding_cosine: 0.40
+  require_type_match: true
+  auto_merge_threshold: 0.90
+  auto_reject_threshold: 0.65
+  gray_band_action: flag
+  strip_suffixes:
+    - inc
+    - inc.
+    - ltd
+    - ltd.
+    - llc
+    - corp
+    - corporation
+    - pvt
+    - private limited
+    - gmbh
+    - plc
+    - co
+    - co.
+  strip_honorifics: [mr, mrs, ms, dr, prof, sir]
+  max_cluster_size: 50
+
+orchestration:
+  default_strategy: hybrid
+  min_relevant_docs: 2
+  max_query_rewrites: 2
+  max_repair_attempts: 2
+  max_structured_output_repairs: 2
+  grader:
+    batch_size: 8
+    fail_open: true
+  verification:
+    check_citations_exist: true
+    check_groundedness: true
+    min_groundedness_score: 0.7
+    refuse_on_failure: true
+  streaming:
+    emit_node_events: true
+
+llm:
+  gateway_base_url: http://litellm:4000/v1
+  request_timeout_s: 45
+  roles:
+    router: { model: fast-low-latency, temperature: 0.0, max_tokens: 400 }
+    grader: { model: fast-low-latency, temperature: 0.0, max_tokens: 300 }
+    bulk: { model: bulk-high-tpm, temperature: 0.1, max_tokens: 2000 }
+    synth: { model: synth-quality, temperature: 0.2, max_tokens: 1200 }
+    judge: { model: judge-alt-vendor, temperature: 0.0, max_tokens: 500 }
+  batching:
+    bulk_chunks_per_request: 20
+    grader_docs_per_request: 8
+  adaptive_rate_limit:
+    enabled: true
+    honor_retry_after: true
+    read_headers:
+      - retry-after
+      - x-ratelimit-remaining-requests
+      - x-ratelimit-remaining-tokens
+      - x-ratelimit-reset-requests
+    backoff_on_429_s: 2
+    max_backoff_s: 120
+  structured_output:
+    mode: json_schema
+    repair_prompt_includes_error: true
+
+stores:
+  qdrant:
+    url: http://qdrant:6333
+    prefer_grpc: true
+    timeout_s: 10
+    hnsw: { m: 16, ef_construct: 128 }
+    sparse_modifier: idf
+    payload_indexes: [doc_ids, entity_ids, schema_version]
+  neo4j:
+    uri: bolt://neo4j:7687
+    database: neo4j
+    store_chunk_text: true
+    max_connection_pool_size: 20
+    connection_timeout_s: 10
+    query_timeout_s: 15
+  postgres:
+    dsn_env: POSTGRES_DSN
+    pool_min: 2
+    pool_max: 10
+    statement_timeout_ms: 5000
+  redis:
+    url: redis://redis:6379/0
+    max_connections: 20
+
+cache:
+  embedding: { enabled: true, ttl_s: 2592000, prefix: "emb:" }
+  retrieval: { enabled: true, ttl_s: 900, prefix: "ret:" }
+  llm: { enabled: true, ttl_s: 3600, semantic: false }
+
+resilience:
+  retry:
+    max_attempts: 3
+    base_delay_ms: 100
+    max_delay_ms: 4000
+    jitter: full
+  circuit_breaker:
+    fail_max: 5
+    reset_timeout_s: 30
+    monitored: [qdrant, neo4j, postgres, litellm]
+  degradation:
+    allow_vector_only: true
+    allow_graph_only: true
+
+observability:
+  service_name: graphrag
+  otlp_endpoint: http://otel-collector:4317
+  otlp_protocol: grpc
+  traces:
+    enabled: true
+    sample_ratio: 0.2
+    record_prompts: false
+    max_recorded_prompt_chars: 2000
+  metrics:
+    enabled: true
+    export_interval_ms: 15000
+  logs:
+    enabled: true
+    level: INFO
+    renderer: json
+    redact_patterns: ["(?i)(api[_-]?key|token|secret|password|authorization)"]
+  phoenix:
+    enabled: true
+    endpoint: http://phoenix:6006
+    send_full_traces: true
+  trail:
+    enabled: true
+    loki_url: http://otel-lgtm:3100
+    tempo_url: http://otel-lgtm:3200
+    max_events: 500
+    truncate_field_chars: 1500
+
+evaluation:
+  golden_set_path: evaluation/golden/
+  smoke_subset_size: 10
+  disable_cache_during_run: true
+  metrics:
+    retrieval: [recall_at_k, mrr, ndcg]
+    generation: [faithfulness, answer_relevancy, context_precision, context_recall]
+    routing: [accuracy, confusion_matrix]
+    safety: [refusal_rate_on_unanswerable]
+  thresholds:
+    recall_at_10: 0.70
+    faithfulness: 0.80
+    answer_relevancy: 0.75
+    routing_accuracy: 0.75
+    refusal_rate_on_unanswerable: 0.80
+  report_path: reports/eval/
+
+security:
+  api_key_header: X-API-Key
+  api_key_hash_algo: argon2id
+  require_idempotency_key_on_ingest: true
+  correlation_id_header: X-Correlation-ID
+  debug_endpoints_require_admin: true
+  max_request_body_mb: 30

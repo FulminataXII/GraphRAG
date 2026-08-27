@@ -1,0 +1,14 @@
+# Developer-machine overrides, deep-merged onto base.yaml by LayeredYamlSource.
+# Only the leaves listed here change; every other key in each section is inherited from
+# base.yaml untouched — this file is intentionally sparse to prove the deep merge works.
+
+app:
+  debug: true
+  cors_origins: ["http://localhost:3000"]
+
+observability:
+  logs:
+    level: DEBUG
+    renderer: console
+  traces:
+    record_prompts: true

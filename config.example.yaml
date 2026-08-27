@@ -1,0 +1,335 @@
+# =============================================================================
+# config/base.yaml  —  THE single source of truth for every tunable parameter.
+#
+# Rules:
+#   * NO secrets in this file. Secrets live in .env as SecretStr fields.
+#   * Loaded by config/settings.py (pydantic-settings) with extra="forbid":
+#     an unknown key here CRASHES STARTUP. That is intentional.
+#   * Override per-environment in config/local.yaml / config/prod.yaml.
+#   * Override any leaf at runtime with env vars using the nested delimiter:
+#       GRAPHRAG_RETRIEVAL__VECTOR__TOP_K=30
+#   * sha256 of this resolved tree (minus secrets) becomes `config_hash`,
+#     attached to every trace and every eval run.
+# =============================================================================
+
+app:
+  name: graphrag
+  readyz_cache_s: 5             # probe results cached; probes run concurrently under a deadline
+  readyz_probe_timeout_ms: 2000
+  env: local                    # local | staging | prod   (validated enum)
+  version: "0.1.0"              # injected from git tag in CI
+  debug: true
+  host: 0.0.0.0
+  port: 8000
+  workers: 1                    # prod: 2 * cpu + 1
+  request_timeout_s: 60
+  cors_origins: ["http://localhost:3000"]
+
+# -----------------------------------------------------------------------------
+# Limits & safety rails. Everything that can run away lives here.
+# -----------------------------------------------------------------------------
+limits:
+  max_query_chars: 2000
+  max_upload_mb: 25
+  allowed_upload_mimetypes: ["application/pdf", "text/plain", "text/markdown",
+                             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]
+  rate_limit:
+    query_per_minute: 30
+    ingest_per_minute: 5
+    burst_multiplier: 2
+  per_request_budget:
+    # LIMITS only. Graph state accumulates SPEND and computes remaining = limit - spent.
+    # Never store "remaining" in parallel-written state: merging remainders with min() discards
+    # one branch's spend and leaks quota on every query.
+    max_llm_calls: 12           # hard ceiling for one /v1/query — prevents runaway repair loops
+    max_wall_ms: 45000          # aggregated with max() across parallel branches, not sum()
+    max_prompt_tokens: 24000
+
+# -----------------------------------------------------------------------------
+# Ingestion
+# -----------------------------------------------------------------------------
+ingestion:
+  chunk_size: 900               # characters, not tokens — deterministic and debuggable
+  chunk_overlap: 150            # validated: must be < chunk_size
+  min_chunk_chars: 80           # discard fragments below this
+  normalizer:
+    unicode_form: NFKC
+    casefold_for_hash: true     # hash the normalized form, store the original
+    strip_zero_width: true
+  parallelism:
+    max_concurrent_docs: 4
+    max_concurrent_chunks: 32
+  payload_projection:         # Qdrant sources[] is a PROJECTION of postgres.chunk_sources.
+                              # Postgres PK(chunk_id, doc_id) arbitrates concurrency; no locks,
+                              # no shards. This worker runs single-concurrency and batches.
+    queue_name: projection
+    max_jobs: 1               # arq Worker(max_jobs=1) — ordering without sharded queues
+    batch_size: 200
+    batch_linger_ms: 500
+  dead_letter:
+    max_attempts: 3
+    backoff_base_s: 2
+    backoff_max_s: 60
+
+# -----------------------------------------------------------------------------
+# Embeddings — local, ONNX, CPU. Must stay free.
+# -----------------------------------------------------------------------------
+embedding:
+  dense:
+    model: BAAI/bge-small-en-v1.5
+    dimensions: 384
+    batch_size: 64
+    # Applied by the adapter itself on QUERIES ONLY, via plain embed().
+    # Do NOT rely on fastembed's query_embed(): for BGE ONNX models it applies no prefix
+    # (verified 0.8.0). Set to "" for models that need none (E5 uses "query: " instead).
+    query_prefix: "Represent this sentence for searching relevant passages: "
+  sparse:
+    model: Qdrant/bm25          # emits TERM-FREQUENCY only; Qdrant supplies IDF at query time
+    enabled: true
+    # CRITICAL: the collection must be created with Modifier.IDF or the sparse leg silently
+    # degrades to raw TF matching. Cannot be added later without recreating the collection.
+    idf_modifier: true
+
+# -----------------------------------------------------------------------------
+# Retrieval
+# -----------------------------------------------------------------------------
+retrieval:
+  vector:
+    collection: chunks
+    top_k: 20
+    prefetch_limit: 50          # per branch, before RRF
+    score_threshold: null       # null = no cutoff; RRF handles ranking
+    timeout_ms: 2000
+  graph:
+    max_hops: 2                 # validated 1..3 — beyond 3 the result set explodes
+    max_paths: 40
+    max_degree_per_hop: 25      # rank+truncate INSIDE the Cypher pattern, per hop.
+                                # A bare LIMIT applies after expansion, so a hub entity still
+                                # makes Neo4j traverse thousands of edges before discarding them.
+    hydrate_from: neo4j         # neo4j | qdrant — Chunk.text lives in Neo4j so the graph path
+                                # needs no vector-store round trip and survives a Qdrant outage
+    entity_link_top_k: 5
+    entity_link_min_score: 0.72
+    timeout_ms: 3000
+    templates_enabled: [neighbors, path_between, entities_by_relation,
+                        co_mentioned, top_entities_for_chunks]
+    text2cypher_enabled: false  # T1 feature flag. See ARCHITECTURE.md §8.3
+  fusion:
+    method: rrf                 # rrf | dbsf
+    # Use models.RrfQuery(rrf=models.Rrf(k=..., weights=...)) — NOT FusionQuery, which takes
+    # no parameters and would leave rrf_k/weights below with nowhere to bind.
+    rrf_k: 60                   # standard constant
+    weights: { vector: 1.0, graph: 1.0 }
+    final_top_k: 10
+  rerank:
+    enabled: false              # T1
+    model: BAAI/bge-reranker-base
+    top_n: 5
+
+# -----------------------------------------------------------------------------
+# Entity resolution. Thresholds validated: 0 < reject < merge <= 1
+# -----------------------------------------------------------------------------
+resolution:
+  collection: entities
+  block_k: 25                   # kNN candidates per mention (avoids O(n^2))
+  scorer_weights:               # must sum to 1.0 (validated)
+    jaro_winkler: 0.30
+    token_set_ratio: 0.30
+    embedding_cosine: 0.40
+  require_type_match: true      # a PERSON never merges into an ORG
+  auto_merge_threshold: 0.90
+  auto_reject_threshold: 0.65
+  gray_band_action: flag        # flag | llm_adjudicate (T1)
+  strip_suffixes: ["inc", "inc.", "ltd", "ltd.", "llc", "corp", "corporation",
+                   "pvt", "private limited", "gmbh", "plc", "co", "co."]
+  strip_honorifics: ["mr", "mrs", "ms", "dr", "prof", "sir"]
+  max_cluster_size: 50          # tripwire: a cluster this big means the threshold is wrong
+
+# -----------------------------------------------------------------------------
+# Orchestration — every loop bound is here, not in code.
+# -----------------------------------------------------------------------------
+orchestration:
+  default_strategy: hybrid      # fail-open target when the router can't decide
+  min_relevant_docs: 2
+  max_query_rewrites: 2
+  max_repair_attempts: 2
+  max_structured_output_repairs: 2
+  grader:
+    batch_size: 8
+    fail_open: true             # grader outage => treat docs as relevant, emit metric
+  verification:
+    check_citations_exist: true # deterministic, zero-cost, catches fabricated sources
+    check_groundedness: true    # LLM judge
+    min_groundedness_score: 0.7
+    refuse_on_failure: true     # refuse rather than answer ungrounded
+  streaming:
+    emit_node_events: true      # SSE node_start/node_end — the demo feature
+
+# -----------------------------------------------------------------------------
+# LLM gateway + model roles. NO API keys here — they live in LiteLLM's own
+# config + .env. The app only knows role names.
+# -----------------------------------------------------------------------------
+llm:
+  gateway_base_url: http://litellm:4000/v1
+  request_timeout_s: 45
+  # litellm router_settings (set in litellm/config.yaml, mirrored here for review):
+  #   routing_strategy: simple-shuffle   <- LiteLLM's default AND documented prod recommendation.
+  #                                         Weighted pick honouring per-deployment rpm/tpm/weight.
+  #                                         Valid alternatives: least-busy, latency-based-routing,
+  #                                         usage-based-routing[-v2], cost-based-routing.
+  #                                         ("random" is not a LiteLLM strategy.)
+  #   enable_weighted_failover: true     <- retry other keys in the SAME group before falling back
+  # These are LiteLLM model *aliases*, not provider model names. The alias -> concrete model
+  # mapping lives only in litellm/config.yaml, so provider churn never touches app config.
+  roles:
+    router:  { model: fast-low-latency, temperature: 0.0, max_tokens: 400  }
+    grader:  { model: fast-low-latency, temperature: 0.0, max_tokens: 300  }
+    bulk:    { model: bulk-high-tpm,    temperature: 0.1, max_tokens: 2000 }
+    synth:   { model: synth-quality,    temperature: 0.2, max_tokens: 1200 }
+    judge:   { model: judge-alt-vendor, temperature: 0.0, max_tokens: 500  }
+    # validated at startup: judge provider MUST differ from synth provider
+    # (LLM-as-judge self-preference bias)
+  batching:
+    # When the binding limit is REQUESTS-per-minute rather than tokens-per-minute, pack more
+    # work into each call. One extraction call over N chunks, not N calls.
+    bulk_chunks_per_request: 20
+    grader_docs_per_request: 8
+  adaptive_rate_limit:
+    # Providers increasingly do not publish free-tier RPM/TPM (Google removed its table in 2026).
+    # Do not trust static numbers: read them off the responses.
+    enabled: true
+    honor_retry_after: true
+    read_headers: ["retry-after", "x-ratelimit-remaining-requests",
+                   "x-ratelimit-remaining-tokens", "x-ratelimit-reset-requests"]
+    backoff_on_429_s: 2
+    max_backoff_s: 120
+  structured_output:
+    mode: json_schema           # json_schema | json_object | prompted
+    repair_prompt_includes_error: true
+
+# -----------------------------------------------------------------------------
+# Data stores. Hosts come from env; shapes and timeouts come from here.
+# -----------------------------------------------------------------------------
+stores:
+  qdrant:
+    url: http://qdrant:6333
+    prefer_grpc: true
+    timeout_s: 10
+    hnsw: { m: 16, ef_construct: 128 }
+    sparse_modifier: idf        # -> models.Modifier.IDF at create_collection time
+    # Index the FLAT doc_ids array, not sources[].doc_id. Qdrant documents dot notation for
+    # nested payload indexes and the array-element form is unresolved upstream; nested-condition
+    # filters are also orders of magnitude slower than a flat keyword match.
+    payload_indexes: ["doc_ids", "entity_ids", "schema_version"]
+  neo4j:
+    uri: bolt://neo4j:7687
+    database: neo4j
+    store_chunk_text: true      # denormalized from Qdrant: enables the graph-only fallback
+                                # AND removes a hydration round trip from the graph hot path
+    max_connection_pool_size: 20
+    connection_timeout_s: 10
+    query_timeout_s: 15
+  postgres:
+    dsn_env: POSTGRES_DSN       # value itself lives in .env
+    pool_min: 2
+    pool_max: 10
+    statement_timeout_ms: 5000
+  redis:
+    url: redis://redis:6379/0
+    max_connections: 20
+
+# -----------------------------------------------------------------------------
+# Caching. `enabled: false` across the board during eval runs, or you score
+# the cache instead of the system.
+# -----------------------------------------------------------------------------
+cache:
+  embedding:  { enabled: true,  ttl_s: 2592000, prefix: "emb:" }
+  retrieval:  { enabled: true,  ttl_s: 900,     prefix: "ret:" }   # keyed on corpus_version
+  llm:        { enabled: true,  ttl_s: 3600,    semantic: false }  # semantic = T1
+
+# -----------------------------------------------------------------------------
+# Resilience
+# -----------------------------------------------------------------------------
+resilience:
+  retry:
+    max_attempts: 3
+    base_delay_ms: 100
+    max_delay_ms: 4000
+    jitter: full                # full | equal | none  — never 'none' in prod
+  circuit_breaker:
+    # Composition is breaker(retry(call)): one logical operation = one failure after its
+    # retries are exhausted. Inverted, 3 retries look like 3 failures and fail_max trips on
+    # transient noise.
+    fail_max: 5
+    reset_timeout_s: 30
+    monitored: [qdrant, neo4j, postgres, litellm]
+  degradation:
+    allow_vector_only: true     # answer without the graph if Neo4j is down
+    allow_graph_only: true      # ONLY valid while stores.neo4j.store_chunk_text is true —
+                                # otherwise the graph returns chunk_ids with no readable text.
+                                # Cross-validated at startup; mismatch = hard fail.
+
+# -----------------------------------------------------------------------------
+# Observability
+# -----------------------------------------------------------------------------
+observability:
+  service_name: graphrag
+  otlp_endpoint: http://otel-collector:4317
+  otlp_protocol: grpc
+  traces:
+    enabled: true
+    sample_ratio: 1.0           # prod: 0.2
+    record_prompts: true        # prod: false, or redact
+    max_recorded_prompt_chars: 2000
+  metrics:
+    enabled: true
+    export_interval_ms: 15000
+  logs:
+    enabled: true
+    level: DEBUG                # prod: INFO
+    renderer: console           # prod: json
+    redact_patterns: ["(?i)(api[_-]?key|token|secret|password|authorization)"]
+  phoenix:
+    enabled: true
+    endpoint: http://phoenix:6006
+    # Phoenix receives COMPLETE traces, not just OpenInference spans. Filtering non-LLM spans
+    # out of this pipeline orphans the LLM spans from their parents and destroys the call tree.
+    # Reduce volume at TRACE granularity (tailsampling / routing connector), never per-span.
+    send_full_traces: true
+  trail:
+    enabled: true               # /v1/debug/trail/{cid} — auto-disabled when env == prod
+    loki_url: http://otel-lgtm:3100
+    tempo_url: http://otel-lgtm:3200
+    max_events: 500
+    truncate_field_chars: 1500
+
+# -----------------------------------------------------------------------------
+# Evaluation
+# -----------------------------------------------------------------------------
+evaluation:
+  golden_set_path: evaluation/golden/
+  smoke_subset_size: 10         # what CI runs on every PR
+  disable_cache_during_run: true
+  metrics:
+    retrieval: [recall_at_k, mrr, ndcg]
+    generation: [faithfulness, answer_relevancy, context_precision, context_recall]
+    routing: [accuracy, confusion_matrix]
+    safety: [refusal_rate_on_unanswerable]
+  thresholds:                   # CI fails the build below these
+    recall_at_10: 0.70
+    faithfulness: 0.80
+    answer_relevancy: 0.75
+    routing_accuracy: 0.75
+    refusal_rate_on_unanswerable: 0.80
+  report_path: reports/eval/
+
+# -----------------------------------------------------------------------------
+# Security
+# -----------------------------------------------------------------------------
+security:
+  api_key_header: X-API-Key
+  api_key_hash_algo: argon2id
+  require_idempotency_key_on_ingest: true
+  correlation_id_header: X-Correlation-ID
+  debug_endpoints_require_admin: true
+  max_request_body_mb: 30
