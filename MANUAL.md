@@ -346,23 +346,47 @@ git check-ignore .env      # must print ".env" — if it prints nothing, .env is
 gitleaks detect --no-git   # scans the working tree too
 ```
 
-### M-4 · After BO-02 — Verify the trace tree yourself
-Only you can confirm this; a passing test can't tell you a waterfall *looks* right.
+### M-4 · After BO-03 — Verify the trace tree yourself
 
-1. In the Ubuntu shell: `docker compose --profile core --profile obs up -d`, then generate a real
-   request. `/healthz` won't do — it's deliberately excluded from logging. Use the CLI
-   (`graphrag query "..."`) or `curl -X POST localhost:8000/v1/query -H 'Content-Type: application/json' -d '{"question":"test"}'`.
-2. Open **Grafana → `localhost:3000`**. It's configured for anonymous access, so no login.
-   Left sidebar → **Explore** → pick **Tempo** from the datasource dropdown at the top →
-   **Search** tab → **Run query**. Click any trace.
-3. **What you're checking:** the spans form a *tree* — an HTTP root with children indented
-   beneath it — not a flat list of equal-level rows. A flat list means parent context isn't
-   propagating.
-4. Open **Phoenix → `localhost:6006`** → Traces. Find the same trace. **Confirm its parents are
-   present**, not just the LLM spans floating alone.
+> **Not after BO-02.** BO-02 builds the telemetry spine but there is no `api` service until BO-03,
+> so nothing is listening on `:8000` and there is no realistic request to trace. Running M-4 early
+> shows an empty Tempo and looks like a broken pipeline when nothing is wrong.
+>
+> If you want to confirm the spine works at BO-02, run `make test-int` — `test_trail_cli_roundtrip`
+> emits a real trace through the collector. That proves the plumbing; the visual check below is
+> still worth doing properly once BO-03 gives you an HTTP root span to hang it from.
+
+Only you can do this; a passing test can't tell you a waterfall *looks* right.
+
+1. Bring up both profiles and generate a real request:
+   ```bash
+   make up obs=1
+   curl -X POST localhost:8000/v1/query \
+     -H 'Content-Type: application/json' -d '{"question":"test"}'
+   ```
+   `/healthz` will not do — it's deliberately excluded from logging.
+2. **Grafana → `localhost:3000`** (anonymous, no login). Left sidebar → **Explore** → choose
+   **Tempo** in the datasource dropdown → **Search** tab → **Run query**. Click any trace.
+3. **Set the time picker to "Last 15 minutes" first.** The default range often sits outside your
+   run, which shows an empty result that looks identical to a broken exporter.
+4. **What you're checking:** spans form a *tree* — an HTTP root with children indented beneath —
+   not a flat list of equal-level rows. Flat means parent context isn't propagating.
+5. **Phoenix → `localhost:6006`** → Traces → find the same trace → confirm **its parents are
+   present**, not just LLM spans floating alone.
 
 Disconnected fragments in Phoenix mean a span filter crept into the Collector config. Screenshot
 the good version now — it's a README asset and you won't get a cleaner one later.
+
+**If Tempo is empty, check these in order:**
+
+| Cause | Check |
+|---|---|
+| Nothing emitted anything | Did the request actually reach an app? A connection-refused `curl` produces no span |
+| Data was wiped | `otel-lgtm` stores traces **in memory only**. Any `make down` since the run clears everything — re-run, then look |
+| Time range | Set the picker to "Last 15 minutes" |
+| obs stack never started | `docker compose ps --all` — otel-collector, otel-lgtm and phoenix must all be listed and healthy. `make up obs=1` must pass `-f docker-compose.obs.yml` |
+| Collector rejecting spans | `docker logs --tail 20 graphrag-otel-collector-1` — export errors appear here, not in the app |
+| App pointed at the wrong endpoint | Host-run tools need `localhost:4317`; containerized services need `otel-collector:4317`. See the endpoint note in BLUEPRINT §5.1 |
 
 ### M-5 · Before BO-11 — Golden set
 **50 items** in `evaluation/golden/`. Budget 2–3 hours. Do not let the agent generate these
@@ -426,8 +450,8 @@ than any feature in the repo.
 |---|---|---|---|
 | **00** | Repo, tooling, config module, infra containers | `make up` → 7 healthy containers; `python -m graphrag.config.validate` prints a hash | 2–3 h |
 | **01** | Domain models, ports, errors, test fakes | Nothing runs. ~60 fast unit tests pass | 2–3 h |
-| **02** | Observability spine | Traces in Grafana **and** Phoenix; JSON logs with `correlation_id` | 3–4 h |
-| **03** | FastAPI app, Postgres, Redis, queue adapter | `curl localhost:8000/healthz` → 200; `/readyz` → 503 when you stop a backend | 3–4 h |
+| **02** | Observability spine | `make test-int` emits a real trace end-to-end; JSON logs carry `correlation_id`. No HTTP traces yet — there's no `api` service until BO-03 | 3–4 h |
+| **03** | FastAPI app, Postgres, Redis, queue adapter | `curl localhost:8000/healthz` → 200; `/readyz` → 503 when you stop a backend. **Run M-4 now** — this is the first BO with a traceable HTTP request | 3–4 h |
 | **04** | Embeddings + Qdrant | Collection exists **with the IDF modifier**; hybrid search returns ranked chunks | 3–4 h |
 | **05** | Ingestion end to end | `graphrag ingest corpus/` → chunks in Qdrant; the shared paragraph has **2 sources** | 5–6 h |
 | **06** | LLM gateway | Structured calls return validated objects; killing a provider fails over silently | 3–4 h |
