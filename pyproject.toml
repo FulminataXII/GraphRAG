@@ -99,6 +99,11 @@ ignore = ["E501"]
 [tool.ruff.lint.isort]
 known-first-party = ["graphrag"]
 
+# `Depends(...)` as an argument default is how FastAPI's dependency injection works — not the
+# B008 "mutable default" footgun the rule exists for.
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.params.Depends"]
+
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101"]
 

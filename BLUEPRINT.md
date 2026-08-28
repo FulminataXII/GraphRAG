@@ -7,6 +7,19 @@ what it guarantees. It does not argue **why** — that's the architecture doc.
 tests, move on. If you need to know how another component behaves, read its contract here — do not
 read its implementation. If a contract is ambiguous, stop and flag it rather than guessing.
 
+**Precedence.** This document is authoritative for *what to build*. `ARCHITECTURE.md` is
+authoritative for *why*, and is context — read it when a contract looks arbitrary and you want the
+reasoning, not to derive an implementation. **Where the two disagree about a name, signature,
+value, or shape, this document wins** — and the disagreement is a defect: report it.
+
+Two things in `ARCHITECTURE.md` are actively unsafe to copy from:
+- **Appendix A (Design Review Log) describes rejected designs on purpose.** It says things like
+  "the original version stored only `Chunk {chunk_id, ord, preview}`" and "an earlier version
+  merged budgets with `min()`" so the reasoning is on record. Those are the designs we threw
+  away. Never implement from Appendix A.
+- **Its code blocks are sketches**, deliberately incomplete — some contain literal `...` or
+  `[...]` placeholders. Every implementable signature lives here instead.
+
 ---
 
 ## 0. Global Conventions
@@ -170,6 +183,7 @@ imported from `core`, not redeclared.
 |---|---|---|
 | `TrailEvent`, `TrailBundle` | `adapters/telemetry/trail.py` | 02 |
 | `ErrorBody`, `ErrorEnvelope` | `apps/api/errors.py` | 03 |
+| `Container`, `ReadyzProber` | `apps/api/main.py` | 03 |
 | `ParsedDocument`, `ChunkSpec` | `services/ingestion/` | 05 |
 | `MentionOut`, `RelationOut`, `CitationOut`, `EntityExtraction`, `RoutePlanOut`, `RelevanceGrade`, `RelevanceGradeBatch`, `RewrittenQuery`, `AnswerOut`, `Entailment` | `services/orchestration/schemas.py` | 06 |
 | `ResolutionResult` | `services/resolution/service.py` | 07 |
@@ -997,6 +1011,13 @@ class QdrantVectorStore:
 > the container values as environment variables in the compose service definitions. Env beats YAML
 > in the source precedence (§5.1), so both are served from one file with no toggling. Editing the
 > YAML back and forth is the failure mode this avoids: it works for whoever ran it last.
+>
+> **This applies to every backend, not just the collector.** `stores.qdrant.url`,
+> `stores.neo4j.uri`, `stores.redis.url` and `llm.gateway_base_url` all have the same two correct
+> values. `config/local.yaml` holds the `localhost` form; each compose service definition
+> overrides with the container hostname via `GRAPHRAG_STORES__QDRANT__URL` and friends. Host-run
+> integration tests and the CLI then work unmodified alongside the containerized `api` and
+> `worker`.
 
 > ⚠️ **`extra` must be `"ignore"`, not `"forbid"` — and the reason is non-obvious.**
 > `.env` is shared with Docker Compose, so it holds variables that are *not* `Settings` fields:
@@ -1066,9 +1087,24 @@ class Neo4jGraphStore:
 
 ### 5.4 `adapters/postgres/`
 
+> ⚠️ **All graphrag tables live in a dedicated `graphrag` schema, never `public`.**
+> One Postgres instance serves three consumers (ARCHITECTURE §4.2): LiteLLM creates its own
+> virtual-key and spend tables, Phoenix creates its trace tables — including an `api_keys` table
+> that collides with ours by name — and graphrag needs the ledger. Sharing `public` means a name
+> collision, and worse, an `alembic upgrade` that could touch another tool's tables.
+>
+> The first migration issues `CREATE SCHEMA IF NOT EXISTS graphrag`; every table sets
+> `schema="graphrag"`; the connection sets `search_path=graphrag,public`. Alembic's
+> `version_table_schema` must also be `graphrag`, or its own bookkeeping table lands in `public`.
+
 `tables.py` — SQLAlchemy Core table definitions (no ORM):
-`documents`, `chunk_sources`, `jobs`, `api_keys`, `eval_runs`, `eval_results`.
-`chunk_sources` has `PRIMARY KEY (chunk_id, doc_id)` — this is the concurrency arbiter.
+`documents`, `chunk_sources`, `jobs`, `api_keys`, `eval_runs`, `eval_results`,
+`corpus_version_counter`.
+
+- `chunk_sources` has `PRIMARY KEY (chunk_id, doc_id)` — this is the concurrency arbiter.
+- `corpus_version_counter` is a single-row table backing `bump_corpus_version()`'s atomic
+  `UPDATE ... RETURNING`. It exists because deriving the version from `MAX(documents.corpus_version)`
+  is a read-then-write race under concurrent ingestion, which is precisely what the counter avoids.
 
 `migrations/` — Alembic. One revision per build order that changes schema.
 
@@ -1522,6 +1558,23 @@ class Container:
         - aclose() closes pools in reverse construction order.
         - The worker builds its own Container in arq's on_startup. Same class, same settings.
     """
+
+class ReadyzProber:
+    """Owns readiness probing so `Container` doesn't grow health logic.
+
+    Contract:
+        - Holds a name -> async probe mapping; runs all probes concurrently under one deadline
+          via asyncio.TaskGroup, and caches the result for `app.readyz_cache_s`.
+        - Probes are RAW client pings (`get_collections()`, `verify_connectivity()`, an HTTP
+          call), private to Container — never the VectorStore/GraphStore/LLMClient ports, which
+          are BO-04/06/08 components. Readiness asks "is this reachable", not "does the port work".
+        - Never raises: a failed probe becomes a named entry in the unready set.
+        - Constructible with an empty mapping, which is what the all-fakes unit `container`
+          fixture uses.
+    """
+    def __init__(self, probes: Mapping[str, Callable[[], Awaitable[None]]],
+                 *, cache_s: int, timeout_s: float) -> None: ...
+    async def check(self) -> ReadyzResult: ...
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:

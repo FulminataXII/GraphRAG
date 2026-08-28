@@ -6,6 +6,24 @@ app:
   debug: true
   cors_origins: ["http://localhost:3000"]
 
+# Same reasoning as the observability block below: base.yaml's container hostnames are correct
+# for the containerized api/worker (BO-03 adds `api`; BO-05 adds `worker`), but every process
+# that reads this file on the HOST (CLI, integration tests under `make test-int`) needs the
+# published localhost ports instead. docker-compose.yml overrides these three leaves back to
+# container hostnames via GRAPHRAG_STORES__* env vars for the containerized services — env
+# beats YAML (BLUEPRINT §2.2), so both consumers are served with no file toggling. Postgres
+# isn't here: its DSN lives in `secrets` (BLUEPRINT §2.1's SecretsSection), which is populated
+# ONLY from .env/env vars and has no YAML leaf to override — host-run integration tests set
+# GRAPHRAG_SECRETS__POSTGRES_DSN to a localhost DSN directly (see tests/conftest.py's `stack`
+# fixture) rather than through this file.
+stores:
+  qdrant:
+    url: http://localhost:6333
+  neo4j:
+    uri: bolt://localhost:7687
+  redis:
+    url: redis://localhost:6379/0
+
 observability:
   # BO-02 has no containerized api/worker yet (those land in BO-03/BO-05) — every process that
   # reads this file at dev time (the CLI, integration tests) runs on the host, not inside the

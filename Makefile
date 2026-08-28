@@ -1,4 +1,4 @@
-.PHONY: up down test test-int test-all lint eval trail
+.PHONY: up down test test-int test-all lint eval trail migrate
 
 # Docker Compose only auto-loads docker-compose.yml — docker-compose.obs.yml must be named
 # explicitly with -f, or `--profile obs` selects a profile that no loaded file declares and
@@ -40,3 +40,9 @@ eval:
 
 trail:
 	uv run graphrag trail $(cid)
+
+# Apply Postgres migrations against the host-published port (config/local.yaml's `stores`
+# overrides only cover qdrant/neo4j/redis; the Postgres DSN is a secret, so point APP_ENV at
+# local and override just the DSN host here). Requires `make up` first.
+migrate:
+	APP_ENV=local GRAPHRAG_SECRETS__POSTGRES_DSN=postgresql://$${POSTGRES_USER:-graphrag}:$${POSTGRES_PASSWORD:-changeme}@localhost:5432/$${POSTGRES_DB:-graphrag} uv run alembic upgrade head

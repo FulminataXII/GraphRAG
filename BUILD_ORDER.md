@@ -135,7 +135,8 @@ Legend: `[C]` component · `[T]` test · `[G]` gate (must pass to proceed)
 
 **Build:**
 1. `[C]` `adapters/postgres/tables.py` — all tables; `chunk_sources` with `PK(chunk_id, doc_id)`
-2. `[C]` `adapters/postgres/migrations/` — Alembic init + first revision
+2. `[C]` `adapters/postgres/migrations/` — Alembic init + first revision. **All tables in a dedicated `graphrag` schema**, never `public`: LiteLLM and Phoenix share this Postgres instance and Phoenix already owns an `api_keys` table in `public`. Set `version_table_schema="graphrag"` too, or Alembic's own bookkeeping lands in `public`
+2b. `[C]` `Makefile` — add a `migrate` target; BO-03 introduces the first schema needing Alembic
 3. `[C]` `adapters/postgres/ledger.py` — `PostgresDocumentLedger`
 4. `[C]` `adapters/postgres/sources.py` — `PostgresSourceRegistry`
 5. `[C]` `adapters/redis_cache.py` — `RedisCache`
@@ -147,12 +148,12 @@ Legend: `[C]` component · `[T]` test · `[G]` gate (must pass to proceed)
 11. `[C]` `Dockerfile` + add `api` service to compose. **Set container-side endpoints as compose environment variables**, don't edit `config/local.yaml`: `GRAPHRAG_OBSERVABILITY__OTLP_ENDPOINT=http://otel-collector:4317`, and likewise `...__TRAIL__LOKI_URL` / `...__TRAIL__TEMPO_URL`. `local.yaml` keeps `localhost` for host-run tools (CLI, integration tests); env beats YAML in the source precedence, so both consumers are served with no duplicated config and no file toggling
 
 **Test:**
-- `[T]` `test_ledger_register_dedups_on_sha256` — second register returns False
-- `[T]` `test_ledger_illegal_transition_raises` — INDEXED → PARSING raises `ConflictError`
-- `[T]` `test_corpus_version_monotonic_under_concurrency`
-- `[T][G]` `test_source_registry_add_idempotent` — same (chunk_id, doc_id) twice → 1 row
+- `[T]` `[integration]` `test_ledger_register_dedups_on_sha256` — second register returns False
+- `[T]` `[integration]` `test_ledger_illegal_transition_raises` — INDEXED → PARSING raises `ConflictError`
+- `[T]` `[integration]` `test_corpus_version_monotonic_under_concurrency` — real DB only; a fake cannot exhibit the read-then-write race this guards
+- `[T][G]` `[integration]` `test_source_registry_add_idempotent` — same (chunk_id, doc_id) twice → 1 row
 - `[T][G]` `test_source_registry_concurrent_add` — 16 concurrent tasks, 16 distinct docs, 1 chunk → 16 rows, no lock
-- `[T]` `test_orphaned_chunks_single_query`
+- `[T]` `[integration]` `test_orphaned_chunks_single_query`
 - `[T]` `test_cache_returns_none_on_redis_error` — degrades, never raises
 - `[T]` `test_cache_delete_prefix_uses_scan`
 - `[T][G]` `test_enqueue_injects_traceparent` — envelope carries a valid W3C traceparent
@@ -160,13 +161,14 @@ Legend: `[C]` component · `[T]` test · `[G]` gate (must pass to proceed)
 - `[T]` `test_error_envelope_shape` — code, message, correlation_id, trace_id, retryable
 - `[T][G]` `test_500_leaks_no_traceback`
 - `[T]` `test_container_requires_request_in_dependency` — a `Depends` without `Request` fails
+- `[T][G]` `[integration]` `test_tables_isolated_in_graphrag_schema` — every graphrag table, and Alembic's version table, exist in schema `graphrag`; `public` contains none of them. Guards against colliding with Phoenix's `api_keys` or an `alembic upgrade` touching another tool's tables
+- `[T]` `[integration]` `test_readyz_probes_are_raw_client_pings` — `readyz` reaches Qdrant/Neo4j/LiteLLM via raw client calls private to `Container`, not via `VectorStore`/`GraphStore`/`LLMClient`. Those ports are BO-04/06/08; readiness only needs reachability
 - `[T]` `test_lifespan_closes_pools_in_reverse`
 - `[T][G]` `[integration]` `test_endpoints_resolve_per_consumer` — the containerized `api` exports to `otel-collector:4317` while the host-run CLI exports to `localhost:4317`, both in the same `make up` session. One YAML value cannot serve both; if a host tool is pointed at a container hostname it fails DNS resolution, and the reverse silently drops telemetry inside the container
 - `[T]` `[integration]` `test_healthz_up_readyz_down` — stop Qdrant: `healthz` 200, `readyz` 503 naming qdrant
 - `[T]` `test_readyz_result_cached` — 10 calls within `readyz_cache_s` → one probe round
 - `[T]` `test_readyz_bounded_by_deadline` — one backend hanging → still responds within the deadline
 - `[T]` `test_healthz_performs_no_io`
-- `[T]` `test_duplicate_content_returns_existing_doc_id` — same bytes under a different Idempotency-Key → 200 with the original `doc_id`, no second job
 
 ---
 
@@ -227,6 +229,7 @@ Legend: `[C]` component · `[T]` test · `[G]` gate (must pass to proceed)
 - `[T]` `[integration]` `test_delete_last_source_removes_from_both_stores`
 - `[T][G]` `[integration]` `test_trace_spans_queue_boundary` — API span and worker span share one `trace_id`
 - `[T]` `test_ingest_requires_idempotency_key` — 422 without it
+- `[T]` `test_duplicate_content_returns_existing_doc_id` — same bytes under a different Idempotency-Key → 200 with the original `doc_id`, no second job. (Exercises `POST /v1/documents`, so it belongs here, not in BO-03 where the ledger-level `test_ledger_register_dedups_on_sha256` covers the underlying contract)
 - `[T]` `test_worker_rejects_wrong_schema_version`
 - `[T]` `test_job_state_machine_terminal_states`
 

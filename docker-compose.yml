@@ -9,7 +9,7 @@
 # ~4.75GB total across the 5 core services (qdrant 1g + neo4j 1500m + postgres 512m +
 # redis 256m + litellm 1500m) — measured minimums, not guesses.
 #
-# No `api`/`worker` services here yet — those land in BO-03/BO-05.
+# `worker`/`projection-worker` land in BO-05.
 
 services:
   qdrant:
@@ -111,6 +111,51 @@ services:
       timeout: 5s
       retries: 6
       start_period: 40s
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: [core]
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # base.yaml's stores.*/observability.* leaves already use container hostnames — these
+      # exist to override config/local.yaml back to them, since APP_ENV=local (set in .env) also
+      # pulls in local.yaml's HOST-facing localhost overrides (see local.yaml's comment). env
+      # beats YAML in Settings' source precedence (BLUEPRINT §2.2), so this is the only place
+      # that needs to know both consumers exist — no file toggling, no duplicated config.
+      GRAPHRAG_OBSERVABILITY__OTLP_ENDPOINT: http://otel-collector:4317
+      GRAPHRAG_OBSERVABILITY__TRAIL__LOKI_URL: http://otel-lgtm:3100
+      GRAPHRAG_OBSERVABILITY__TRAIL__TEMPO_URL: http://otel-lgtm:3200
+      GRAPHRAG_STORES__QDRANT__URL: http://qdrant:6333
+      GRAPHRAG_STORES__NEO4J__URI: bolt://neo4j:7687
+      GRAPHRAG_STORES__REDIS__URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz', timeout=3).status==200 else 1)",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
 
 volumes:
   qdrant_data:

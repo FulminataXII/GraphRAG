@@ -1,8 +1,8 @@
 """Shared test fixtures. See BLUEPRINT §9.
 
-The `container` fixture (all-fakes `Container`) and the session-scoped `stack` fixture land
-with the components they depend on — `Container` is a BO-03 type (`apps/api/main.py`), so
-wiring a fixture around it now would import something that doesn't exist yet.
+The session-scoped `stack` fixture (real docker-compose backends) lives in
+`tests/integration/conftest.py`, scoped only to integration tests — importing it here would put
+container-lifecycle machinery in the path of every unit test.
 """
 
 from __future__ import annotations
@@ -15,7 +15,18 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from graphrag.apps.api.main import Container, ReadyzProber
 from graphrag.config.settings import Settings
+from tests.fakes import (
+    FakeCache,
+    FakeDocumentLedger,
+    FakeEmbedder,
+    FakeGraphStore,
+    FakeJobQueue,
+    FakeLLMClient,
+    FakeSourceRegistry,
+    FakeVectorStore,
+)
 from tests.unit._settings_helpers import REQUIRED_SECRET_ENV
 
 
@@ -50,6 +61,28 @@ def settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
     for key, value in REQUIRED_SECRET_ENV.items():
         monkeypatch.setenv(key, value)
     return Settings()
+
+
+@pytest.fixture
+def container(settings: Settings) -> Container:
+    """All-fakes `Container` — every port backed by an in-memory `tests.fakes` implementation.
+
+    Bypasses `Container.create()` (which builds real Postgres/Redis/arq/Qdrant/Neo4j clients)
+    entirely: constructing `Container` directly with fakes is what keeps this a `unit` fixture.
+    """
+    empty_prober = ReadyzProber({}, cache_s=5, timeout_s=1)
+    return Container(
+        settings=settings,
+        ledger=FakeDocumentLedger(),
+        sources=FakeSourceRegistry(),
+        cache=FakeCache(),
+        job_queue=FakeJobQueue(),
+        readyz_prober=empty_prober,
+        vector_store=FakeVectorStore(),
+        graph_store=FakeGraphStore(),
+        embedder=FakeEmbedder(),
+        llm_client=FakeLLMClient(),
+    )
 
 
 @pytest.fixture

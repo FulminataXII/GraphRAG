@@ -3,6 +3,13 @@
 **Status:** Design v1.0 · **Target:** 4-day build, ₹0 cost, production-grade tooling
 **Audience:** you (builder) + campus placement interviewers reading the repo
 
+> ⚠️ **This document explains WHY. It is not the implementation spec.**
+> `BLUEPRINT.md` is authoritative for every name, signature, value and shape; where the two
+> disagree, BLUEPRINT wins and the disagreement is a defect worth reporting.
+> Code blocks here are illustrative sketches, some containing literal `...` placeholders.
+> **Appendix A deliberately documents designs that were rejected** — it exists so the reasoning
+> is on record. Never implement from it.
+
 ---
 
 ## 0. Scope Reality Check (read this first)

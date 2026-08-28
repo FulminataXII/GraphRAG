@@ -12,7 +12,11 @@ For you, not the agent. What you do, what to expect, and where to intervene.
 Start each build order in a **fresh Claude Code session**, launched from your project directory
 in the **Ubuntu (WSL2) terminal** — see M-0. Give it exactly this:
 
-> Read `ARCHITECTURE.md`, `BLUEPRINT.md`, and `BUILD_ORDER.md`.
+> `BUILD_ORDER.md` tells you what to build; `BLUEPRINT.md` is the authoritative spec for every
+> name, signature and contract. Read `ARCHITECTURE.md` only for rationale when a contract looks
+> arbitrary — where the two disagree, BLUEPRINT wins, and report the disagreement. Never
+> implement anything from ARCHITECTURE's Appendix A: it documents rejected designs on purpose.
+>
 > Implement **BO-0X** only. Do not implement components from other build orders.
 > Follow each component's contract in BLUEPRINT exactly. Consult BLUEPRINT §1a (Type Index)
 > before referencing any type; if one you need isn't listed, that is a spec gap — report it
@@ -495,6 +499,18 @@ than any feature in the repo.
 - **DON'T run integration tests against your demo data** without a reset — several tests delete documents.
 - **DON'T commit `.env`.** Check `gitleaks` before every push. One leaked key in a public CV repo undoes the whole project.
 - **DON'T put confidential or personal documents in `corpus/`.** Free tiers may train on prompts.
+- **DON'T let enforcement infrastructure be edited to make a build order pass.** `tests/` is only
+  half of it. `scripts/check_layering.py`, the `lint` target in the `Makefile`, ruff/mypy config in
+  `pyproject.toml`, and fixtures in `tests/conftest.py` all decide whether a violation is even
+  *detectable* — loosening one silently disables a whole class of checks, and no test goes red to
+  tell you. Reading these files is fine and expected: the agent is checking a constraint it must
+  satisfy, from the tool that enforces it. Changing them is what needs a reason. After each BO:
+  ```bash
+  git diff bo-0<previous> -- scripts/ Makefile pyproject.toml tests/conftest.py
+  ```
+  Empty is the expected result. Anything else, ask what rule changed and why. Legitimate reasons
+  exist — BO-01 updated `check_layering.py` because the §0 table itself was corrected — but it
+  should be stated up front, not discovered by you afterwards.
 - **DON'T let the agent "fix" a failing test by weakening its assertion.** This is the single most common way an agentic build produces a green suite that proves nothing. Concretely, watch for: a `[G]` assertion changed to something looser, a test given `@pytest.mark.skip` or `xfail`, a threshold edited in `config/*.yaml` instead of the code, or an exact-value check turned into `assert result is not None`. Spot it with `git diff` on `tests/` — if a test file changed in the same commit that fixed the code it tests, read that diff before committing.
 - **DON'T add features before BO-12 hardening.** A reranker is not worth an unauthenticated API.
 - **DON'T use `latest` or `main-latest` image tags.** Pin by digest. There is a real 2026 incident behind this rule and an interviewer may ask about it.
