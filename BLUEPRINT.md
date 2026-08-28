@@ -904,8 +904,15 @@ class TrailBuilder:
     """Assemble a paste-ready debug bundle for one correlation_id.
 
     Contract:
-        - Queries Loki with {service="graphrag"} | json | correlation_id="<cid>"
+        - Queries Loki with {service_name="graphrag"} | json | correlation_id="<cid>"
           and Tempo with TraceQL { .app.correlation_id = "<cid>" }.
+          NOTE the label is `service_name`, not `service`: Loki's OTLP ingestion path maps the
+          OTel resource attribute `service.name` to a label with the dot replaced by an
+          underscore. Querying `{service="graphrag"}` matches nothing and returns an empty
+          bundle, which looks exactly like "logs were never exported".
+          Also: do NOT set `service.namespace` in the OTel resource. When it is present, Loki's
+          default heuristic emits `namespace/name` as the service_name VALUE, so an equality
+          match on the service name alone stops matching.
         - Merges into one list ordered by timestamp; spans and logs interleaved.
         - Truncates every field to observability.trail.truncate_field_chars.
         - Applies redact_secrets to every record before rendering.
@@ -981,6 +988,15 @@ class QdrantVectorStore:
     """
     def __init__(self, client: AsyncQdrantClient, settings: Settings) -> None: ...
 ```
+
+> **Host vs container endpoints: use precedence, not two files.** Any setting naming a service by
+> hostname (`observability.otlp_endpoint`, `trail.loki_url`, `trail.tempo_url`, and the entries in
+> `stores.*`) has two correct values depending on who is reading it. Host-run consumers — the CLI,
+> integration tests, your browser — need `localhost:<published port>`. Containerized consumers —
+> `api`, `worker` — need the compose service name. Keep `localhost` in `config/local.yaml` and set
+> the container values as environment variables in the compose service definitions. Env beats YAML
+> in the source precedence (§5.1), so both are served from one file with no toggling. Editing the
+> YAML back and forth is the failure mode this avoids: it works for whoever ran it last.
 
 > ⚠️ **`extra` must be `"ignore"`, not `"forbid"` — and the reason is non-obvious.**
 > `.env` is shared with Docker Compose, so it holds variables that are *not* `Settings` fields:

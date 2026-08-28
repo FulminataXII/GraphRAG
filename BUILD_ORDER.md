@@ -120,7 +120,10 @@ Legend: `[C]` component · `[T]` test · `[G]` gate (must pass to proceed)
 - `[T]` `test_correlation_id_present_on_error_response`
 - `[T]` `[integration]` `test_spans_reach_collector`
 - `[T]` `[integration]` `test_trail_builder_merges_sources`
-- `[T][G]` `[integration]` `test_trail_cli_roundtrip` — force an error, run `graphrag trail <cid>`, assert the written file contains the error, the span sequence, and ≥1 log line. An empty bundle means the OTLP logs pipeline isn't exporting or the Loki label doesn't match
+- `[T]` `test_loki_query_uses_service_name_label` — the LogQL selector is `{service_name=...}`, not `{service=...}`. Loki derives `service_name` from the OTel resource attribute; a `service` selector matches nothing and returns an empty result rather than an error
+- `[T][G]` `[integration]` `test_trail_cli_roundtrip` — force an error, run `graphrag trail <cid>`, assert the written file contains the error, the span sequence, and ≥1 log line. An empty bundle means the OTLP logs pipeline isn't exporting or the Loki label doesn't match — the label is `service_name` (Loki converts `service.name` by replacing dots with underscores), not `service`
+- `[T]` `test_makefile_obs_profile_loads_obs_compose` — `make up obs=1` actually passes `-f docker-compose.obs.yml`. A missing `-f` starts only the core profile and reports success, so the obs stack silently never runs
+- `[T]` `test_obs_healthchecks_match_image_contents` — otelcol-contrib ships `FROM scratch` (no shell), otel-lgtm has `curl` but no `wget`, phoenix has `python` but no shell. Each healthcheck must use something the image actually contains
 - `[T]` `test_trail_survives_backend_outage` — one backend down → renders partial, lists failure, doesn't raise
 - `[T]` `test_telemetry_init_never_raises` — bad endpoint → degrades to no-op
 - `[T]` `test_otel_logs_imports_confined_to_one_module` — static scan: `opentelemetry.sdk._logs` is imported only by `telemetry/logging.py`, so an upstream break is a one-file fix
@@ -141,7 +144,7 @@ Legend: `[C]` component · `[T]` test · `[G]` gate (must pass to proceed)
 8. `[C]` `apps/api/deps.py` — `get_container`
 9. `[C]` `apps/api/main.py` — `Container`, `lifespan`, `create_app`
 10. `[C]` `apps/api/routers/health.py`
-11. `[C]` `Dockerfile` + add `api` service to compose
+11. `[C]` `Dockerfile` + add `api` service to compose. **Set container-side endpoints as compose environment variables**, don't edit `config/local.yaml`: `GRAPHRAG_OBSERVABILITY__OTLP_ENDPOINT=http://otel-collector:4317`, and likewise `...__TRAIL__LOKI_URL` / `...__TRAIL__TEMPO_URL`. `local.yaml` keeps `localhost` for host-run tools (CLI, integration tests); env beats YAML in the source precedence, so both consumers are served with no duplicated config and no file toggling
 
 **Test:**
 - `[T]` `test_ledger_register_dedups_on_sha256` — second register returns False
@@ -158,6 +161,7 @@ Legend: `[C]` component · `[T]` test · `[G]` gate (must pass to proceed)
 - `[T][G]` `test_500_leaks_no_traceback`
 - `[T]` `test_container_requires_request_in_dependency` — a `Depends` without `Request` fails
 - `[T]` `test_lifespan_closes_pools_in_reverse`
+- `[T][G]` `[integration]` `test_endpoints_resolve_per_consumer` — the containerized `api` exports to `otel-collector:4317` while the host-run CLI exports to `localhost:4317`, both in the same `make up` session. One YAML value cannot serve both; if a host tool is pointed at a container hostname it fails DNS resolution, and the reverse silently drops telemetry inside the container
 - `[T]` `[integration]` `test_healthz_up_readyz_down` — stop Qdrant: `healthz` 200, `readyz` 503 naming qdrant
 - `[T]` `test_readyz_result_cached` — 10 calls within `readyz_cache_s` → one probe round
 - `[T]` `test_readyz_bounded_by_deadline` — one backend hanging → still responds within the deadline

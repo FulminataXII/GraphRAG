@@ -572,7 +572,9 @@ Every error response carries the IDs:
 
 Then `graphrag trail <correlation_id>` (CLI, and `GET /v1/debug/trail/{cid}` in dev):
 
-1. Query Loki: `{service="graphrag"} | json | correlation_id="01J8X..."`
+1. Query Loki: `{service_name="graphrag"} | json | correlation_id="01J8X..."`
+   (the label is `service_name` — Loki's OTLP ingestion converts the `service.name` resource
+   attribute by replacing dots with underscores; `{service=...}` silently matches nothing)
 2. Query Tempo (TraceQL): `{ .app.correlation_id = "01J8X..." }`
 3. Merge into one time-ordered sequence, redact secrets, truncate prompts to `n` chars
 4. Emit `debug_bundle_<cid>.md`: config hash, route taken, per-node timings, every failure with
