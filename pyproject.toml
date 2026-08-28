@@ -66,6 +66,9 @@ dev = [
     "types-pyyaml",
 ]
 
+[project.scripts]
+graphrag = "graphrag.apps.cli.main:main"
+
 [tool.uv]
 package = true
 

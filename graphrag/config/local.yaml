@@ -7,8 +7,23 @@ app:
   cors_origins: ["http://localhost:3000"]
 
 observability:
+  # BO-02 has no containerized api/worker yet (those land in BO-03/BO-05) — every process that
+  # reads this file at dev time (the CLI, integration tests) runs on the host, not inside the
+  # compose network, so these must be the published localhost ports, not container hostnames.
+  # Once BO-03 adds containerized services, they override these two leaves back to the
+  # container hostnames via GRAPHRAG_OBSERVABILITY__* env vars in docker-compose.yml — env
+  # beats YAML in the precedence order (BLUEPRINT §2.2), so no conflict.
+  otlp_endpoint: http://localhost:4317
   logs:
     level: DEBUG
     renderer: console
   traces:
     record_prompts: true
+    # base.yaml's 0.2 is a prod-scale cost control (ParentBased(TraceIdRatioBased) — a root
+    # span this drops is never recorded or exported at all, not just unsampled-but-visible).
+    # At dev scale that reads as flaky: `graphrag trail <cid>` intermittently finds no spans
+    # for a real request, for no reason visible locally. Full sampling for full visibility.
+    sample_ratio: 1.0
+  trail:
+    loki_url: http://localhost:3100
+    tempo_url: http://localhost:3200

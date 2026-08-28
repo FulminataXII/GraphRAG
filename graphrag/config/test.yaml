@@ -16,6 +16,14 @@ observability:
     record_prompts: false
   metrics:
     enabled: false
+  logs:
+    # false here means "skip the OTLP export handler" (telemetry/logging.py), not "stop
+    # logging" — configure_logging() always installs the stdout renderer regardless of this
+    # flag. Without this override, every unit test that calls configure_logging() would try a
+    # real OTLP export to the (nonexistent, in a unit-test run) collector and eat a retry/
+    # backoff cycle per call — exactly the non-determinism this file's module docstring says
+    # to avoid.
+    enabled: false
   phoenix:
     enabled: false
   trail:

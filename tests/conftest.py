@@ -10,6 +10,10 @@ from __future__ import annotations
 import os
 
 import pytest
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from graphrag.config.settings import Settings
 from tests.unit._settings_helpers import REQUIRED_SECRET_ENV
@@ -46,3 +50,23 @@ def settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
     for key, value in REQUIRED_SECRET_ENV.items():
         monkeypatch.setenv(key, value)
     return Settings()
+
+
+@pytest.fixture
+def span_exporter() -> InMemorySpanExporter:
+    """An InMemorySpanExporter wired to the process-wide TracerProvider.
+
+    `telemetry.decorators` always fetches the GLOBAL tracer (`otel.tracer()`), so tests that
+    exercise `@traced` need spans to land somewhere inspectable on that same global provider.
+    OTel's API refuses to replace an already-set global TracerProvider (a second
+    `set_tracer_provider` call is a silent no-op with a warning), so this only installs one if
+    none exists yet, then attaches a fresh exporter — safe to call from many tests in one
+    process without clobbering state another test already set up.
+    """
+    provider = trace.get_tracer_provider()
+    if not isinstance(provider, TracerProvider):
+        provider = TracerProvider()
+        trace.set_tracer_provider(provider)
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    return exporter

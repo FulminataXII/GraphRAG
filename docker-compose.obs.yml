@@ -4,7 +4,13 @@
 
 services:
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.160.0
+    # 0.160.0 does not exist as a released tag (only nightly builds do, as of 2026-08-28) —
+    # pinned to the latest actual stable release instead. Built from otel/collector.Dockerfile,
+    # which layers a static busybox onto the base image so the healthcheck below has something
+    # to exec — see that file for why: the base image ships FROM SCRATCH with no shell/tools.
+    build:
+      context: ./otel
+      dockerfile: collector.Dockerfile
     profiles: [obs]
     command: ["--config=/etc/otel/collector.yaml"]
     volumes:
@@ -19,7 +25,7 @@ services:
       phoenix:
         condition: service_started
     healthcheck:
-      test: ["CMD-SHELL", "bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/4318'"]
+      test: ["CMD", "/tools/busybox", "nc", "-z", "127.0.0.1", "4318"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -30,9 +36,16 @@ services:
     profiles: [obs]
     ports:
       - "3000:3000"
+      # Loki and Tempo's own HTTP APIs — published so TrailBuilder (BO-02) can query them
+      # directly. It runs from the host (the CLI is `uv run graphrag trail`, and integration
+      # tests run via `uv run pytest`, neither inside the compose network), so it cannot reach
+      # them through Grafana's proxy at :3000 or through the container-only hostname.
+      - "3100:3100"
+      - "3200:3200"
     mem_limit: 1.5g
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3000 || exit 1"]
+      # This image ships curl, not wget (confirmed against grafana/otel-lgtm:latest).
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3000 || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -50,7 +63,15 @@ services:
         condition: service_healthy
     mem_limit: 512m
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:6006 || exit 1"]
+      # Same fix as litellm (BLUEPRINT §1): the image has no shell/curl/wget, but it does run
+      # on its own bundled python3.13 — use that instead of a shell probe.
+      test:
+        [
+          "CMD",
+          "python3.13",
+          "-c",
+          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:6006', timeout=3).status==200 else 1)",
+        ]
       interval: 5s
       timeout: 5s
       retries: 20

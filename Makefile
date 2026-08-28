@@ -1,7 +1,10 @@
 .PHONY: up down test test-int test-all lint eval trail
 
+# Docker Compose only auto-loads docker-compose.yml — docker-compose.obs.yml must be named
+# explicitly with -f, or `--profile obs` selects a profile that no loaded file declares and
+# silently starts nothing extra (the failure BO-02 needs `make up obs=1` to hit).
 COMPOSE := docker compose --profile core
-COMPOSE_OBS := docker compose --profile core --profile obs
+COMPOSE_OBS := docker compose -f docker-compose.yml -f docker-compose.obs.yml --profile core --profile obs
 
 # Bring up the core data plane + gateway (add `obs=1` to also bring up the observability plane).
 up:
