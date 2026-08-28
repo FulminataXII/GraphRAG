@@ -195,7 +195,7 @@ graphrag/
 │   ├── local.yaml             # dev overrides, committed
 │   ├── prod.yaml              # prod overrides, committed
 │   └── .env                   # SECRETS ONLY, gitignored
-├── core/                      # pure domain — zero I/O, zero framework imports
+├── core/                      # pure domain — zero I/O, the leaf layer (see BLUEPRINT §1a)
 │   ├── models.py              # Chunk, SourceRef, Entity, Relation, Answer, Citation…
 │   ├── events.py              # versioned job/event payload schemas
 │   ├── ports.py               # Protocol: VectorStore, GraphStore, LLMClient, Embedder…

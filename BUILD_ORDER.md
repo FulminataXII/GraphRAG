@@ -65,8 +65,9 @@ Legend: `[C]` component · `[T]` test · `[G]` gate (must pass to proceed)
 ## BO-01 — Core Domain
 
 **Build:**
+0. **Read BLUEPRINT §1a (Type Index) first.** It names every type and its owning module. If you need a type that isn't listed there, that is a spec gap — stop and report it rather than inventing one.
 1. `[C]` `core/ids.py` — `normalize_for_hash`, `content_hash`, `chunk_id`, `entity_id`, `new_correlation_id`
-2. `[C]` `core/models.py` — all models incl. `Spend.merge`, `Spend.exceeds`
+2. `[C]` `core/models.py` — every type listed under `core/models.py` in **BLUEPRINT §1a (Type Index)**, incl. `SparseVector`, `BudgetLimits`, `ScorerWeights`, `JobStatus`, `StructuredResult[T]`, `Spend.merge`, `Spend.exceeds`
 3. `[C]` `core/errors.py` — full hierarchy
 4. `[C]` `core/events.py` — `JobEnvelope` + payloads
 5. `[C]` `core/ports.py` — all Protocols
@@ -87,6 +88,10 @@ Legend: `[C]` component · `[T]` test · `[G]` gate (must pass to proceed)
 - `[T]` `test_error_codes_unique` — no duplicate `code` across the hierarchy
 - `[T]` `test_job_envelope_json_roundtrip`
 - `[T]` `test_fakes_satisfy_protocols` — `isinstance(FakeX(), XPort)` for every port
+- `[T][G]` `test_ports_reference_only_core_types` — every annotation in `core/ports.py` resolves to a name defined in `core/`, stdlib, or pydantic. `core/` is the leaf layer and may not reference a type owned by `adapters/` (this is why `StructuredResult` lives in `core/models.py`)
+- `[T]` `test_empty_sparse_vector_is_valid` — `SparseVector(indices=[], values=[])` constructs. BM25 legitimately returns nothing for stopword-only queries, and a raise here surfaces much later as a retrieval crash
+- `[T]` `test_sparse_vector_arrays_aligned` — mismatched lengths raise
+- `[T]` `test_job_status_distinct_from_document_status` — the two enums don't share members; a job can be `complete` while its document is `FAILED`
 
 ---
 

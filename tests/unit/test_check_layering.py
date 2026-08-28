@@ -22,12 +22,12 @@ check_layering = _load_check_layering()
 
 
 def test_layering_script_catches_violation(tmp_path: Path) -> None:
-    bad_file = tmp_path / "resolve.py"
-    bad_file.write_text("from graphrag.adapters.qdrant_store import QdrantStore\n")
+    bad_file = tmp_path / "models.py"
+    bad_file.write_text("from graphrag.config.schema import AppSection\n")
 
-    violations = check_layering.check_file(bad_file, "services")
+    violations = check_layering.check_file(bad_file, "core")
     assert len(violations) == 1
-    assert "adapters" in str(violations[0])
+    assert "config" in str(violations[0])
 
 
 def test_layering_script_allows_permitted_import(tmp_path: Path) -> None:

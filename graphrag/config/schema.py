@@ -15,6 +15,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, SecretStr, model_validator
 
+from graphrag.core.models import BudgetLimits, ScorerWeights
+
 _SECTION_CONFIG = ConfigDict(frozen=True, extra="forbid")
 
 
@@ -46,14 +48,6 @@ class RateLimitSpec(_Section):
     query_per_minute: int
     ingest_per_minute: int
     burst_multiplier: int
-
-
-class BudgetLimits(_Section):
-    """LIMITS only. Graph state accumulates SPEND and computes remaining = limit - spent."""
-
-    max_llm_calls: int
-    max_wall_ms: int
-    max_prompt_tokens: int
 
 
 class LimitsSection(_Section):
@@ -197,12 +191,6 @@ class RetrievalSection(_Section):
 # ---------------------------------------------------------------------------
 # resolution
 # ---------------------------------------------------------------------------
-class ScorerWeights(_Section):
-    jaro_winkler: float
-    token_set_ratio: float
-    embedding_cosine: float
-
-
 class ResolutionSection(_Section):
     collection: str
     block_k: int

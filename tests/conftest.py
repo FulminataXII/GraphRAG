@@ -1,5 +1,8 @@
-"""Shared test isolation. Not the full BO-01 conftest (fakes/factories/container fixtures
-land there) — just enough so no test can read the repo's real `.env` or ambient shell env.
+"""Shared test fixtures. See BLUEPRINT §9.
+
+The `container` fixture (all-fakes `Container`) and the session-scoped `stack` fixture land
+with the components they depend on — `Container` is a BO-03 type (`apps/api/main.py`), so
+wiring a fixture around it now would import something that doesn't exist yet.
 """
 
 from __future__ import annotations
@@ -7,6 +10,9 @@ from __future__ import annotations
 import os
 
 import pytest
+
+from graphrag.config.settings import Settings
+from tests.unit._settings_helpers import REQUIRED_SECRET_ENV
 
 
 @pytest.fixture(autouse=True)
@@ -30,3 +36,13 @@ def _isolated_cwd_and_env(
     for key in list(os.environ):
         if key.startswith("GRAPHRAG_"):
             monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture
+def settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
+    """Settings loaded with APP_ENV=test (config/test.yaml) — the network-free, no-cache
+    profile. Secrets are stubbed test values; nothing here holds a real credential."""
+    monkeypatch.setenv("APP_ENV", "test")
+    for key, value in REQUIRED_SECRET_ENV.items():
+        monkeypatch.setenv(key, value)
+    return Settings()

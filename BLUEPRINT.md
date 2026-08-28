@@ -17,11 +17,18 @@ read its implementation. If a contract is ambiguous, stop and flag it rather tha
 
 | Layer | May import from | Must NOT import |
 |---|---|---|
-| `core/` | stdlib, pydantic | anything in `graphrag.*` except `core` |
-| `services/` | `core` | `adapters`, `apps`, any I/O library |
+| `core/` | stdlib, pydantic **only** | any `graphrag.*` — this is the leaf |
+| `config/` | stdlib, pydantic, `core` | `services`, `adapters`, `apps` |
+| `services/` | `core`, `config` | `adapters`, `apps`, any I/O library |
 | `adapters/` | `core`, `config`, I/O libs | `services`, `apps` |
 | `apps/` | everything | — |
-| `config/` | stdlib, pydantic | any `graphrag.*` |
+
+`config/` may import `core` because shared value types (`BudgetLimits`, `ScorerWeights`) are
+domain concepts that both a config section and a service need. They live in `core/models.py`;
+`config/schema.py` reuses them rather than redeclaring a parallel set that can drift.
+
+`services/` may import `config/` **for types only** — a section model as a constructor parameter
+is fine. Calling `get_settings()` inside a service is not; see §5.2.
 
 `services/` receives capabilities through `core.ports` Protocols passed to constructors. A service
 that imports `qdrant_client` is a bug, not a shortcut.
@@ -129,6 +136,50 @@ graphrag-hybrid/
     ├── conftest.py  fakes.py  factories.py
     ├── unit/  integration/  contract/  eval/
 ```
+
+---
+
+## 1a. Type Index — where every named type lives
+
+**Before referencing a type, look it up here.** If a type you need isn't listed, that's a spec
+gap: stop and report it rather than inventing one. Types are declared in exactly one module.
+
+### `core/models.py` — BO-01 (importable by everything)
+`SparseVector` · `BudgetLimits` · `ScorerWeights` · `JobStatus` · `StructuredResult[T]` ·
+`SourceRef` · `Chunk` · `ScoredChunk` · `Mention` · `Entity` · `Relation` · `GraphPath` ·
+`Citation` · `Answer` · `Spend` · `NodeFailure` · `RoutePlan` · `DocumentRecord` ·
+`DocumentStatus` · `EntityType`
+
+### `core/errors.py` — BO-01
+`AppError` and its subclasses (§3.3).
+
+### `core/events.py` — BO-01
+`JobEnvelope[P]` · `IngestDocumentPayload` · `ExtractEntitiesPayload` · `ProjectPayloadPayload` ·
+`DeleteDocumentPayload`
+
+### `config/schema.py` — BO-00
+All `*Section` models, plus the nested spec models they contain: `RateLimitSpec`,
+`NormalizerSpec`, `ParallelismSpec`, `ProjectionSpec`, `DeadLetterSpec`, `DenseSpec`,
+`SparseSpec`, `VectorSpec`, `GraphSpec`, `FusionSpec`, `RerankSpec`. **Each mirrors the
+correspondingly-named mapping in `config.example.yaml` field for field** — that file is the
+authoritative shape; these are its typed counterpart. `BudgetLimits` and `ScorerWeights` are
+imported from `core`, not redeclared.
+
+### Declared in the BO that builds them
+| Type | Module | BO |
+|---|---|---|
+| `TrailEvent`, `TrailBundle` | `adapters/telemetry/trail.py` | 02 |
+| `ErrorBody`, `ErrorEnvelope` | `apps/api/errors.py` | 03 |
+| `ParsedDocument`, `ChunkSpec` | `services/ingestion/` | 05 |
+| `MentionOut`, `RelationOut`, `CitationOut`, `EntityExtraction`, `RoutePlanOut`, `RelevanceGrade`, `RelevanceGradeBatch`, `RewrittenQuery`, `AnswerOut`, `Entailment` | `services/orchestration/schemas.py` | 06 |
+| `ResolutionResult` | `services/resolution/service.py` | 07 |
+| `QueryState`, `NodeDeps`, `QueryResult`, `StreamEvent` | `services/orchestration/` | 10 |
+| `GoldenItem`, `ConfusionMatrix`, `EvalReport` | `evaluation/` | 11 |
+| `ApiKey` | `apps/api/deps.py` | 12 |
+
+**The `*Out` suffix marks an LLM output schema** — what the model is asked to produce. It is
+validated and then mapped to the corresponding domain model in `core/models.py`. `AnswerOut` is
+not `Answer`; the former is untrusted until validation succeeds.
 
 ---
 
@@ -372,6 +423,59 @@ def new_correlation_id() -> str:
 All frozen pydantic models.
 
 ```python
+class SparseVector(BaseModel):
+    """A sparse embedding: parallel index/value arrays, as Qdrant expects.
+
+    Contract:
+        - len(indices) == len(values); indices are unique and ascending.
+        - An EMPTY sparse vector (both arrays empty) is legal and must not raise anywhere.
+          BM25 legitimately returns no terms for a query of pure stopwords.
+        - Values are raw term frequencies. IDF is applied server-side by Qdrant via Modifier.IDF.
+    """
+    indices: list[int]; values: list[float]
+
+class BudgetLimits(BaseModel):
+    """Per-request CEILINGS. The counterpart to Spend, which holds consumption.
+
+    Lives in core (not config) because both LimitsSection and the orchestrator need it, and two
+    parallel declarations would drift. `remaining = limits - spent`, computed on read.
+    """
+    max_llm_calls: int; max_wall_ms: int; max_prompt_tokens: int
+
+class ScorerWeights(BaseModel):
+    """Entity-resolution scorer weights. Must sum to 1.0 (validated in config).
+
+    In core for the same reason as BudgetLimits: ResolutionSection and score_pair both use it.
+    """
+    jaro_winkler: float; token_set_ratio: float; embedding_cosine: float
+
+class JobStatus(BaseModel):
+    """Queue-level job state, returned by JobQueue.status().
+
+    Distinct from DocumentStatus: this is about the JOB (queued/running/failed/complete),
+    DocumentStatus is about the DOCUMENT's position in the pipeline. A job can be `complete`
+    while its document is `FAILED`.
+    """
+    job_id: str
+    state: Literal["deferred", "queued", "in_progress", "complete", "failed", "not_found"]
+    attempts: int
+    enqueued_at: AwareDatetime | None
+    finished_at: AwareDatetime | None
+    error: str | None
+
+class StructuredResult[T](BaseModel):
+    """Return type of LLMClient.structured().
+
+    Defined HERE, in core, not beside the LiteLLM adapter — core/ports.py references it, and
+    core may not import adapters. The adapter constructs it; the port declares it.
+    """
+    value: T
+    model_served: str
+    repair_attempts: int
+    prompt_tokens: int
+    completion_tokens: int
+    latency_ms: int
+
 class SourceRef(BaseModel):
     """One document's claim on a chunk.
 
@@ -1007,9 +1111,7 @@ class RedisCache:
 ### 5.6 `adapters/litellm_client.py`
 
 ```python
-class StructuredResult(BaseModel, Generic[T]):
-    value: T; model_served: str; repair_attempts: int
-    prompt_tokens: int; completion_tokens: int; latency_ms: int
+# StructuredResult is defined in core/models.py (§3.2) — this adapter constructs it.
 
 class LiteLLMClient:
     """Implements LLMClient. The ONLY component that talks to the gateway.

@@ -9,11 +9,11 @@ Contract:
     - Exits 0 silently otherwise.
 
 Layer | May import from graphrag.*
-    core      -> core only
-    services  -> core, services
+    core      -> core only (the leaf)
+    config    -> core, config
+    services  -> core, config, services
     adapters  -> core, config, adapters
     apps      -> everything (core, config, services, adapters, apps)
-    config    -> config only (no graphrag.* at all, per BLUEPRINT: "any graphrag.*" forbidden)
 """
 
 from __future__ import annotations
@@ -28,10 +28,10 @@ PACKAGE_ROOT = REPO_ROOT / "graphrag"
 # Layer -> set of graphrag top-level packages it may import from (besides itself).
 ALLOWED: dict[str, set[str]] = {
     "core": set(),
-    "services": {"core"},
+    "config": {"core"},
+    "services": {"core", "config"},
     "adapters": {"core", "config"},
     "apps": {"core", "config", "services", "adapters"},
-    "config": set(),
 }
 
 
