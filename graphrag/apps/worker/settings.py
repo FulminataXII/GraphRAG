@@ -50,6 +50,12 @@ class WorkerSettings:
         - on_startup builds the Container and stores it on ctx; on_shutdown closes it.
         - max_jobs = ingestion.parallelism.max_concurrent_docs
         - retry_jobs=True, max_tries from ingestion.dead_letter.max_attempts
+
+    `health_check_interval` (arq's own default is 3600s) is set well below
+    `docker-compose.yml`'s healthcheck `interval` for this service — arq writes its health
+    sentinel to Redis on this cadence, and `arq --check` just reads it back; at the 3600s
+    default the sentinel wouldn't exist yet for up to an hour after startup, so the container
+    would sit in `starting`/flap between healthy and unhealthy forever.
     """
 
     functions: ClassVar[list[Any]] = [ingest_document, delete_document]
@@ -59,6 +65,7 @@ class WorkerSettings:
     max_jobs = get_settings().ingestion.parallelism.max_concurrent_docs
     retry_jobs = True
     max_tries = get_settings().ingestion.dead_letter.max_attempts
+    health_check_interval = 10
 
 
 class ProjectionWorkerSettings:
@@ -68,6 +75,9 @@ class ProjectionWorkerSettings:
         - queue_name = ingestion.payload_projection.queue_name
         - max_jobs = 1. This single value is what removes the read-modify-write race;
           any value > 1 reintroduces it.
+
+    `health_check_interval` — see `WorkerSettings`'s docstring; set well below
+    `docker-compose.yml`'s healthcheck `interval` for the `projection-worker` service.
     """
 
     functions: ClassVar[list[Any]] = [project_chunk_payload]
@@ -76,3 +86,4 @@ class ProjectionWorkerSettings:
     redis_settings = RedisSettings.from_dsn(get_settings().stores.redis.url)
     queue_name = get_settings().ingestion.payload_projection.queue_name
     max_jobs = 1
+    health_check_interval = 10

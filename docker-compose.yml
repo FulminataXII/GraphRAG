@@ -193,13 +193,15 @@ services:
       litellm:
         condition: service_healthy
     healthcheck:
-      # arq ships its own health-check mode: it writes a heartbeat key to Redis on every
-      # iteration and `--check` reads it back, so this needs no HTTP endpoint of its own.
-      test: ["CMD", "arq", "graphrag.apps.worker.settings.WorkerSettings", "--check"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 20s
+      # arq ships its own health-check mode: it writes a heartbeat sentinel to Redis on the
+      # cadence set by WorkerSettings.health_check_interval (10s — see that class's docstring
+      # for why it must stay below this interval) and `--check` just reads it back, so this
+      # needs no HTTP endpoint of its own.
+      test: ["CMD", "arq", "--check", "graphrag.apps.worker.settings.WorkerSettings"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
   projection-worker:
     build:
@@ -229,11 +231,11 @@ services:
         condition: service_healthy
     healthcheck:
       test:
-        ["CMD", "arq", "graphrag.apps.worker.settings.ProjectionWorkerSettings", "--check"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 20s
+        ["CMD", "arq", "--check", "graphrag.apps.worker.settings.ProjectionWorkerSettings"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
 volumes:
   qdrant_data:

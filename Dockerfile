@@ -34,7 +34,12 @@ ENV PATH="/app/.venv/bin:$PATH" \
 
 USER graphrag
 
-EXPOSE 8000
+# No EXPOSE here on purpose: this same image also runs as `worker`/`projection-worker` (BO-05),
+# neither of which serves HTTP. `EXPOSE` is baked into the image and would show up as a
+# misleading "8000/tcp" on those containers in `docker ps`/`docker compose ps` even though
+# nothing listens on it. Compose's `ports:`/`expose:` publish the api service's port 8000
+# independently of any image-level EXPOSE, so declaring it there (not here) keeps the port
+# documented for `api` without leaking into the other two entrypoints.
 
 # docker-compose.yml sets the real command per service (api / worker / projection-worker).
 # This default matches the api service so `docker run` alone is still useful for a smoke test.
