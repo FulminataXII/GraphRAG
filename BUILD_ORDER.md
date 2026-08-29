@@ -177,12 +177,17 @@ Legend: `[C]` component · `[T]` test · `[G]` gate (must pass to proceed)
 **Build:**
 1. `[C]` `adapters/fastembed_embedder.py`
 2. `[C]` `adapters/qdrant_store.py` — `ensure_collections`, `upsert_chunks`, `set_sources`, `get_chunks`, `delete_chunks`, `hybrid_search`, entity methods
+3. `[C]` Wire the embedder and vector store into `Container.create()`. BO-03 left them `None` by design; BO-04 constructs them, asserts the embedder's real output width against `embedding.dense.dimensions`, then calls `ensure_collections()`. Editing `apps/api/main.py` here is expected, not scope creep — `test_container_asserts_embedding_dimensions` requires it
 
 **Test:**
 - `[T][G]` `[integration]` `test_collection_created_with_idf_modifier` — **run first.** `sparse_vectors["bm25"].modifier == "idf"`
 - `[T][G]` `[integration]` `test_existing_collection_without_idf_raises` — pre-create without it → `ConflictError` naming the fix
 - `[T]` `[integration]` `test_ensure_collections_idempotent`
 - `[T]` `[integration]` `test_payload_indexes_created` — on the flat `doc_ids`, not `sources[].doc_id`
+- `[T]` `[integration]` `test_entities_collection_shape` — single unnamed dense vector, COSINE, `embedding.dense.dimensions` wide, **no sparse config**, one payload index on `type`
+- `[T]` `[integration]` `test_entity_id_is_content_addressed` — upserting the same canonical name + type twice yields one point, not two
+- `[T]` `test_hybrid_weights_keyed_by_vector_name` — `weights={"dense": .., "bm25": ..}` maps to `Rrf.weights` in prefetch order; an unknown key raises `ValidationError` rather than being silently dropped
+- `[T]` `test_embedding_cache_ttl_from_config` — the cache write uses `cache.embedding.ttl_s`, not a hardcoded constant. A constant mirroring the YAML default drifts the first time someone edits the YAML, and nothing fails
 - `[T]` `[integration]` `test_doc_ids_filter_uses_index` — `FieldCondition(key="doc_ids", ...)` scopes a search; assert no `NestedCondition` appears anywhere in the codebase
 - `[T]` `test_container_asserts_embedding_dimensions` — a model whose real width differs from `embedding.dense.dimensions` raises in `Container.create` **before** `ensure_collections`
 - `[T][G]` `test_query_prefix_applied_only_for_queries` — the prefix appears on query text and never on indexed text. Backwards or missing = silent retrieval regression with no error anywhere

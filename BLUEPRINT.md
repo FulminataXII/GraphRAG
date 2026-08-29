@@ -672,7 +672,11 @@ class VectorStore(Protocol):
     async def hybrid_search(self, *, dense: list[float], sparse: SparseVector,
                             top_k: int, prefetch_limit: int, rrf_k: int,
                             weights: dict[str, float] | None,
-                            filters: dict[str, Any] | None = None) -> list[ScoredChunk]: ...
+                            filters: dict[str, Any] | None = None) -> list[ScoredChunk]:
+        """weights is keyed by NAMED VECTOR ("dense", "bm25") — the same strings used as
+        `using=` on each Prefetch. The adapter maps them to Qdrant's positional
+        `Rrf.weights: list[float]` in prefetch order. None means equal weighting.
+        A key that names no configured vector is a ValidationError, not a silent no-op."""
     async def upsert_entities(self, entities: Sequence[Entity],
                               vectors: Sequence[list[float]]) -> None: ...
     async def search_entities(self, vector: list[float], *, top_k: int,
@@ -972,7 +976,11 @@ class FastEmbedEmbedder:
           key = f"emb:{model}:{sha256(text)}".
         - embed_sparse returns TERM-FREQUENCY vectors only; IDF is applied by Qdrant.
     """
-    def __init__(self, settings: EmbeddingSection, cache: Cache | None) -> None: ...
+    def __init__(self, embedding: EmbeddingSection, cache: Cache | None,
+                 *, cache_ttl_s: int) -> None:
+        """cache_ttl_s comes from cache.embedding.ttl_s. Passing the section rather than the
+        value would make the adapter depend on CacheSection's shape; passing the value keeps
+        the TTL config-driven without hardcoding a constant that silently drifts from YAML."""
 ```
 
 ### 5.2 `adapters/qdrant_store.py`
@@ -1036,6 +1044,17 @@ class QdrantVectorStore:
 >
 > Do NOT solve this by prefixing the Compose variables with `GRAPHRAG_`. Compose reads them by
 > their conventional names; renaming them breaks the containers to satisfy a config check.
+
+> **The `entities` collection shape.** Smaller and simpler than `chunks` — it exists only for
+> kNN blocking during entity resolution (§6.2) and query-time entity linking (§6.3):
+> - **Point id:** `entity_id(canonical_name, type)` — content-addressed, same construction as
+>   `chunk_id`, so re-resolving the same entity overwrites rather than duplicating.
+> - **Vectors:** a single unnamed dense vector over the canonical name, COSINE, same dimensions
+>   as `chunks.dense`. **No sparse leg** — BM25 over a two-word entity name adds nothing, and a
+>   sparse config here would need its own IDF modifier for no benefit.
+> - **Payload:** `canonical_id`, `name`, `name_normalized`, `type`, `aliases[]`, `mention_count`.
+> - **Payload index:** `type` (keyword) only. `search_entities` filters on it to enforce
+>   `require_type_match`, and doing that server-side is what keeps blocking sub-linear.
 
 > **Payload shape: keep a flat `doc_ids` alongside the rich `sources[]`.**
 > `sources` is an array of objects, which makes it awkward to index and slow to filter:

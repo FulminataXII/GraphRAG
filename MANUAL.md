@@ -82,6 +82,103 @@ faster than debugging a session that has lost the thread.
 
 ---
 
+## Git, and the worktree trap
+
+You don't need much git for this project. Six commands, plus one situation that will bite you.
+
+### The normal loop, once per build order
+
+```bash
+make lint && make test            # you run it, not just the agent
+git status                        # see what changed
+git add -A                        # stage everything
+git commit -m "BO-0X: <name>"
+git tag bo-0X                     # a named bookmark for this commit
+```
+
+`git tag` is the important one. It gives you `git reset --hard bo-03` — an escape hatch back to a
+known-good state. Re-running a build order from a clean checkpoint is almost always faster than
+debugging a session that lost the thread.
+
+Two more you'll want:
+
+```bash
+git log --oneline -5              # recent history
+git diff bo-03 -- scripts/ Makefile pyproject.toml tests/conftest.py
+```
+
+### Worktrees — why your code can vanish
+
+Claude Code sometimes creates a **git worktree**: a second directory, on its own branch, sharing
+one `.git`. Typically at `.claude/worktrees/<branch-name>/`. It's a sensible isolation habit — the
+agent's work can't corrupt your main checkout.
+
+But it produces a failure mode that reads like nothing at all: **the agent reports success, and
+your main checkout doesn't have the code.** Tests pass in the worktree; you run them at
+`~/projects/GraphRAG` and get the previous build order's numbers. Nothing errors. The work is
+real, it's just somewhere else.
+
+**Two symptoms, both from `make test`:**
+
+| Symptom | What it means |
+|---|---|
+| Test count didn't rise after a BO | The code is in a worktree, not your checkout |
+| `git diff bo-0<prev> -- scripts/ ...` empty when the agent said it changed something | Same cause |
+
+**Check first:**
+
+```bash
+git worktree list                 # more than one line = a worktree exists
+git branch -a                     # look for worktree-* branches
+```
+
+**Bringing the work in:**
+
+```bash
+cd .claude/worktrees/<name>       # 1. commit it where it lives
+git status                        # confirm what's there
+git add -A && git commit -m "BO-0X: <name>"
+
+cd ~/projects/GraphRAG            # 2. merge into your checkout
+git status                        # must be clean first
+git merge worktree-<name> --no-ff -m "BO-0X: <name>"
+
+ls graphrag/adapters/<a new file>  # 3. verify it actually arrived
+make test                          # test count MUST go up
+
+git tag bo-0X                                    # 4. tag and tidy
+git worktree remove .claude/worktrees/<name>
+git branch -d worktree-<name>
+```
+
+Step 3 is not optional. A merge that silently no-ops leaves you tagging a commit that doesn't
+contain the work.
+
+### The other worktree trap: Docker
+
+Compose derives its **project name from the directory name**. A worktree is a different directory,
+so it gets its own container namespace: `bo-04-embeddings-vector-store-qdrant-1` instead of
+`graphrag-qdrant-1`.
+
+Integration tests then talk past each other — `docker compose stop qdrant` in the worktree stops a
+container nothing is using, while the running `api` keeps talking to the original. The test fails
+for a reason that looks like a code bug.
+
+Fix either way:
+```bash
+export COMPOSE_PROJECT_NAME=graphrag     # in the worktree, before make up
+docker compose ps --all                  # confirm the name prefix
+docker rm -f $(docker ps -aq --filter "name=bo-0")   # clean up strays
+```
+
+### Two rules
+
+- **Run `make test` in your main checkout after every build order.** The count going up is your
+  proof the work landed. This is the single check that catches the whole class of problem.
+- **Never `git add -A` while a merge is half-done.** If `git status` says you're mid-merge,
+  finish or abort it (`git merge --abort`) before staging anything.
+
+
 ## Your Tasks (M-0 … M-7)
 
 ### M-0 · Windows: do the whole project inside WSL2  ⚠️ read before anything else
@@ -378,8 +475,43 @@ Only you can do this; a passing test can't tell you a waterfall *looks* right.
 5. **Phoenix → `localhost:6006`** → Traces → find the same trace → confirm **its parents are
    present**, not just LLM spans floating alone.
 
-Disconnected fragments in Phoenix mean a span filter crept into the Collector config. Screenshot
-the good version now — it's a README asset and you won't get a cleaner one later.
+Disconnected fragments in Phoenix mean a span filter crept into the Collector config.
+
+#### Reading the result — what "correct" actually looks like
+
+**Grafana / Tempo.** In the waterfall, the root span sits flush left and children are indented
+beneath it:
+
+```
+graphrag  GET /healthz (1.59ms)          <- root
+  - GET /healthz http send (72.81µs)     <- indented = child
+  - GET /healthz http send (13.97µs)
+```
+
+The two `http send` children are normal: FastAPI's ASGI instrumentation emits one for the response
+start and one for the body. Seeing them is a sign the auto-instrumentation is working, not noise.
+The Node graph view shows the same thing as a root node with arrows to two leaves.
+
+A **flat list** — every span at the same indent level, no arrows in the Node graph — means parent
+context isn't propagating. That's the failure this check exists to catch.
+
+`/healthz` appears here even though it's excluded from the access log. The exclusion is
+logging-only; tracing still covers it. Not a leak.
+
+**Phoenix.** Search `trace_id == '<the id from Tempo>'` — it must be the *same* ID, since both
+backends receive the same trace. You want:
+
+- **All spans present**, root included. Three spans in Tempo must be three spans in Phoenix. Only
+  the children arriving means a span filter is dropping parents in the Collector.
+- **`app.correlation_id` in the Attributes table.** This is the one the trail CLI queries on; if
+  it's missing, `graphrag trail <cid>` returns an empty bundle.
+- `kind: unknown` and `Status: Unset` are **expected** on non-LLM spans. Phoenix classifies spans
+  by OpenInference conventions, which HTTP spans don't carry. LLM spans from BO-06 onward will
+  show `kind: LLM` and populate Cost. An empty Cost column at this stage is correct.
+
+**Screenshot timing.** A `/healthz` waterfall is thin. Wait for BO-10, where the trace shows
+`plan_route → retrieve_vector ∥ retrieve_graph → fuse → grade → generate → verify` — that one
+displays the architecture and is the README asset worth having.
 
 **If Tempo is empty, check these in order:**
 
@@ -660,3 +792,4 @@ LF. Reserve pasted heredocs for cases where you'll check with `file` afterwards.
 | `test_stack_healthy` fails only on litellm | Missing `litellm/config.yaml` stub, healthcheck hitting `/health` instead of `/health/liveliness`, or `mem_limit` under 1500m. See traps 3, 4 and 5 |
 | Container restarts with empty logs, exit code 137 | OOMKilled. `docker inspect --format='{{.State.OOMKilled}}' <name>` confirms it. Raise `mem_limit`; see trap 5 |
 | Integration test can't find `docker-compose.yml` | A test fixture chdir'd away from the repo root. Isolation fixtures must skip tests marked `integration` |
+| Integration tests hit the wrong containers | **Git worktrees each get their own Compose project namespace**, derived from the directory name. `docker compose stop qdrant` in a worktree stops `<worktree>-qdrant-1`, not the `graphrag-qdrant-1` your running `api` is talking to — so the test "stops" a container nothing uses and the assertion fails for a reason that looks like a code bug. Run integration tests from the main checkout, or set `COMPOSE_PROJECT_NAME=graphrag` in the worktree. Check with `docker compose ps --all` and confirm the container name prefix |
