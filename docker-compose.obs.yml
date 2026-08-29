@@ -32,7 +32,7 @@ services:
       start_period: 10s
 
   otel-lgtm:
-    image: grafana/otel-lgtm:latest
+    image: grafana/otel-lgtm@sha256:d6b20e35890ef2f91d13944805939acdaf1e5d3ffbf9f9aed08586312826c815
     profiles: [obs]
     ports:
       - "3000:3000"
@@ -52,12 +52,19 @@ services:
       start_period: 30s
 
   phoenix:
-    image: arizephoenix/phoenix:latest
+    # Pinned by digest, not `:latest` — a floating tag silently swapped Phoenix's own image
+    # under a Postgres schema written by an older version, and the newer image's migrations
+    # choked against it (PhoenixMigrationError). Digest pinning makes `docker compose up`
+    # deterministic: the same file always pulls the same bytes, so this can't recur silently.
+    image: arizephoenix/phoenix@sha256:8af594ab0342cc32acc4167f472fb89b4e25f5eb8d5e26c353bf4e102fddb693
     profiles: [obs]
     ports:
       - "6006:6006"
     environment:
-      PHOENIX_SQL_DATABASE_URL: ${POSTGRES_DSN}
+      # Its OWN database, not graphrag's (`${POSTGRES_DSN}`) — sharing `public` with graphrag
+      # and LiteLLM meant no one tool could be reset/migrated without touching the others'
+      # tables. `postgres/init/01-databases.sql` creates this database on a fresh volume.
+      PHOENIX_SQL_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/phoenix
     depends_on:
       postgres:
         condition: service_healthy

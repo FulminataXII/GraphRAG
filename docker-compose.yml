@@ -64,6 +64,11 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # Only runs against an EMPTY data directory (postgres's own entrypoint convention) — a
+      # volume that predates this already has its databases and is left untouched. Creates
+      # `phoenix` and `litellm` alongside the app's own `${POSTGRES_DB}`, so each tool gets an
+      # independently resettable/migratable database instead of sharing `public` with graphrag.
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
     mem_limit: 512m
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
@@ -92,7 +97,10 @@ services:
       - "4000:4000"
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
-      DATABASE_URL: ${POSTGRES_DSN}
+      # Its OWN database, not graphrag's (`${POSTGRES_DSN}`) — see the `postgres` service's
+      # comment: each tool sharing this Postgres instance gets its own database so none can be
+      # reset/migrated at the expense of the others' tables.
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/litellm
     volumes:
       - ./litellm/config.yaml:/app/config.yaml:ro
     command: ["--config", "/app/config.yaml", "--port", "4000"]

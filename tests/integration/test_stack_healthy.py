@@ -1,11 +1,11 @@
 """[G]-adjacent integration test: `make up` (optionally `obs=1`) must bring every declared
 container to a healthy state within 120s.
 
-NOTE: BUILD_ORDER.md says "all 7 services healthy". The compose files as specified in
-BLUEPRINT §1 / ARCHITECTURE §7.2 declare 5 core services (qdrant, neo4j, postgres, redis,
-litellm) + 3 obs services (otel-collector, otel-lgtm, phoenix) = 8, not 7. This test checks
-whatever is actually declared/running rather than hardcoding a count, so it isn't coupled to
-that discrepancy — flagged for a human to reconcile the docs.
+NOTE: BUILD_ORDER.md says "all 7 services healthy" (written against BO-00's core-only
+topology: qdrant, neo4j, postgres, redis, litellm = 5, + 3 obs = 8, still not 7). BO-05 added
+`api`/`worker`/`projection-worker` to core, so the real count has moved again. This test checks
+whatever is actually declared/running rather than hardcoding a count, so it isn't coupled to any
+of that — flagged for a human to reconcile the docs.
 
 Requires `docker compose --profile core [--profile obs] up -d` to already be running
 (`make up` / `make up obs=1`). Excluded from `make test` by the `integration` marker.
@@ -28,10 +28,19 @@ def _compose_ps() -> list[dict]:
     # below would then see only the survivors, find them all "healthy", and false-pass while
     # a dead container sits right next to them. Silent success is exactly the failure mode
     # this test exists to catch.
+    # `-f docker-compose.obs.yml` is load-bearing, same as the Makefile's COMPOSE_OBS: without
+    # it, `--profile obs` selects a profile no LOADED file declares, so compose silently treats
+    # every obs service as nonexistent — `ps --all` would then only ever report the core
+    # services, even when `make up obs=1` is actually running, and this test would pass having
+    # never looked at otel-collector/otel-lgtm/phoenix at all.
     result = subprocess.run(
         [
             "docker",
             "compose",
+            "-f",
+            "docker-compose.yml",
+            "-f",
+            "docker-compose.obs.yml",
             "--profile",
             "core",
             "--profile",
