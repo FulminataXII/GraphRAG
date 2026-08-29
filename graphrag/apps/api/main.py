@@ -1,19 +1,26 @@
 """Container, lifespan, create_app. See BLUEPRINT §7.1.
 
-BO-03 scope note: `Container` is the composition root for every port in `core.ports`, and its
-shape (which fields exist) is meant to be stable from here on — but only `ledger`, `sources`,
-`cache`, and `job_queue` have real adapters yet (Postgres/Redis/arq, all BO-03). `vector_store`,
-`graph_store`, `embedder`, and `llm_client` stay `None` until BO-04/06/08 land their adapters;
+BO-04 scope note: `Container` is the composition root for every port in `core.ports`. As of
+BO-04, `ledger`, `sources`, `cache`, `job_queue` (BO-03), `vector_store`, and `embedder` (BO-04)
+all have real adapters; `graph_store` and `llm_client` stay `None` until BO-06/08 land theirs —
 nothing in this BO calls them.
 
-`readyz` is the one place BO-03 needs to reach Qdrant, Neo4j, and the LiteLLM gateway (ARCHITECTURE
-§2.1's health contract), before their owning BOs exist. Building the full `VectorStore`/
-`GraphStore`/`LLMClient` adapters early to satisfy that would be building ahead of the current BO
-(BO-04/06/08 own `ensure_collections`/`ensure_schema`/`structured()` and all the business logic
-around them). Instead, `readyz`'s probes use the underlying client libraries directly — a raw
-`get_collections()`/`verify_connectivity()`/HTTP ping — which only need "is this reachable",
-not the ports' business methods. These probe-only clients are private to `Container` and are
-never exposed as `vector_store`/`graph_store`/`llm_client`.
+Per BLUEPRINT §7.1's Container contract, `create()` now also constructs `FastEmbedEmbedder` and
+`QdrantVectorStore`, asserts the embedder's real output width matches
+`embedding.dense.dimensions` (see `_assert_embedding_dimensions` — a wrong-width model must
+raise here, before a Qdrant collection of the wrong size gets created), and calls
+`vector_store.ensure_collections()`. A Qdrant failure at startup is therefore no longer
+survivable the way BO-03 described it: this BO's `VectorStore` is real and required.
+
+`readyz` still needs Neo4j and the LiteLLM gateway reachable before their owning BOs land real
+adapters (ARCHITECTURE §2.1's health contract). Building `GraphStore`/`LLMClient` early to
+satisfy that would be building ahead of the current BO (BO-06/08 own `ensure_schema`/
+`structured()` and all the business logic around them). Instead, `readyz`'s probes for those two
+use the underlying client libraries directly — `verify_connectivity()`/an HTTP ping — which only
+need "is this reachable", not the ports' business methods. Qdrant now has both: a real
+`vector_store` (used for actual traffic) AND a separate probe-only client for `readyz`, kept
+distinct so a slow/degraded Qdrant shows up in `readyz` without being routed through the same
+client object real requests use.
 """
 
 from __future__ import annotations
@@ -32,14 +39,17 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from graphrag.adapters.arq_queue import ArqJobQueue
+from graphrag.adapters.fastembed_embedder import FastEmbedEmbedder
 from graphrag.adapters.postgres.ledger import PostgresDocumentLedger
 from graphrag.adapters.postgres.sources import PostgresSourceRegistry
+from graphrag.adapters.qdrant_store import QdrantVectorStore
 from graphrag.adapters.redis_cache import RedisCache
 from graphrag.adapters.telemetry.logging import configure_logging
 from graphrag.adapters.telemetry.middleware import AccessLogMiddleware, CorrelationIdMiddleware
 from graphrag.adapters.telemetry.otel import init_telemetry, shutdown_telemetry
 from graphrag.apps.api.errors import install_exception_handlers
 from graphrag.config.settings import Settings, get_settings
+from graphrag.core.errors import ConflictError
 
 if TYPE_CHECKING:
     from graphrag.core.ports import Cache, DocumentLedger, Embedder, LLMClient
@@ -52,6 +62,26 @@ _log = logging.getLogger(__name__)
 
 Probe = Callable[[], Awaitable[bool]]
 Closer = Callable[[], Awaitable[None]]
+
+
+async def _assert_embedding_dimensions(embedder: Embedder, *, expected: int) -> None:
+    """Raise before a Qdrant collection of the wrong width gets created.
+
+    `config/settings.py`'s cross-section validator explicitly does NOT check this — confirming
+    the model's real output width means loading/running it, which is I/O a pure config object
+    may not do. `Container.create()` is where that I/O is allowed, so the check lives here,
+    before `vector_store.ensure_collections()`. Takes the `Embedder` Protocol (not
+    `FastEmbedEmbedder`) so it is unit-testable with `tests.fakes.FakeEmbedder`.
+    """
+    [probe_vector] = await embedder.embed_dense(["dimension probe"])
+    actual = len(probe_vector)
+    if actual != expected:
+        raise ConflictError(
+            f"embedding.dense produced {actual}-dimensional vectors but "
+            f"embedding.dense.dimensions is configured as {expected}. Fix the config value to "
+            "match the model's real output width before the Qdrant collection is created.",
+            details={"actual": actual, "configured": expected},
+        )
 
 
 class ReadyzProber:
@@ -102,9 +132,10 @@ class Container:
     """Composition root. Built once in lifespan; owns every adapter's lifecycle.
 
     Contract (BLUEPRINT §7.1):
-        - create(settings) constructs clients and returns a ready container. Raises on any
-          failure of a backend this BO actually depends on (Postgres, Redis) — the process must
-          not start with a half-built container. Qdrant/Neo4j/LiteLLM reachability is NOT
+        - create(settings) constructs clients, asserts the embedder's real dimensions, calls
+          vector_store.ensure_collections(), and returns a ready container. Raises on any
+          failure of a backend this BO actually depends on (Postgres, Redis, Qdrant) — the
+          process must not start with a half-built container. Neo4j/LiteLLM reachability is NOT
           required at startup (see module docstring): they're probed lazily by readyz(), and
           the whole point of readyz/degraded-mode is that the app starts and serves even when
           one of them is down.
@@ -162,6 +193,7 @@ class Container:
                 max_connections=settings.stores.redis.max_connections,
             )
             closers.append(("redis", redis_client.aclose))
+            cache = RedisCache(redis_client)
 
             from arq.connections import RedisSettings, create_pool
 
@@ -177,6 +209,13 @@ class Container:
             )
             closers.append(("qdrant_probe", qdrant_probe.close))
 
+            qdrant_client = AsyncQdrantClient(
+                url=settings.stores.qdrant.url,
+                prefer_grpc=settings.stores.qdrant.prefer_grpc,
+                timeout=settings.stores.qdrant.timeout_s,
+            )
+            closers.append(("qdrant", qdrant_client.close))
+
             from neo4j import AsyncGraphDatabase
 
             neo4j_driver = AsyncGraphDatabase.driver(
@@ -188,13 +227,23 @@ class Container:
             http_probe_client = httpx.AsyncClient(timeout=settings.stores.qdrant.timeout_s)
             closers.append(("http_probe", http_probe_client.aclose))
 
-            # Postgres and Redis are the two backends this BO actually depends on (ledger,
-            # sources, cache, job queue) — verify them eagerly so a broken container never
-            # reports itself as started. Qdrant/Neo4j/LiteLLM are probe-only in BO-03; see the
-            # module docstring for why they're not verified here.
+            # Postgres and Redis are the two backends BO-03 depends on (ledger, sources, cache,
+            # job queue); Qdrant joins them in BO-04 (vector_store, embedder) — verify all of
+            # them eagerly so a broken container never reports itself as started. Neo4j/LiteLLM
+            # are still probe-only; see the module docstring for why.
             async with pg_engine.connect() as conn:
                 await conn.execute(text("SELECT 1"))
             await redis_client.ping()
+
+            embedder = FastEmbedEmbedder(
+                settings.embedding, cache if settings.cache.embedding.enabled else None
+            )
+            await _assert_embedding_dimensions(
+                embedder, expected=settings.embedding.dense.dimensions
+            )
+
+            vector_store = QdrantVectorStore(qdrant_client, settings)
+            await vector_store.ensure_collections()
         except Exception:
             for _name, closer in reversed(closers):
                 try:
@@ -205,7 +254,6 @@ class Container:
 
         ledger = PostgresDocumentLedger(pg_engine)
         sources = PostgresSourceRegistry(pg_engine)
-        cache = RedisCache(redis_client)
         job_queue = ArqJobQueue(arq_pool)
 
         litellm_base = settings.llm.gateway_base_url.rsplit("/v1", 1)[0]
@@ -251,6 +299,8 @@ class Container:
             cache=cache,
             job_queue=job_queue,
             readyz_prober=prober,
+            vector_store=vector_store,
+            embedder=embedder,
             closers=closers,
         )
 

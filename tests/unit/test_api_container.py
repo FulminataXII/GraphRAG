@@ -9,8 +9,17 @@ from __future__ import annotations
 
 import asyncio
 
-from graphrag.apps.api.main import Container, ReadyzProber
-from tests.fakes import FakeCache, FakeDocumentLedger, FakeJobQueue, FakeSourceRegistry
+import pytest
+
+from graphrag.apps.api.main import Container, ReadyzProber, _assert_embedding_dimensions
+from graphrag.core.errors import ConflictError
+from tests.fakes import (
+    FakeCache,
+    FakeDocumentLedger,
+    FakeEmbedder,
+    FakeJobQueue,
+    FakeSourceRegistry,
+)
 
 
 async def test_healthz_performs_no_io() -> None:
@@ -58,6 +67,20 @@ async def test_readyz_probe_exception_reports_unhealthy_not_raise() -> None:
     prober = ReadyzProber({"qdrant": _raises}, cache_s=5, timeout_s=1)
 
     assert await prober.check() == {"qdrant": False}
+
+
+async def test_container_asserts_embedding_dimensions() -> None:
+    """A model whose real width differs from `embedding.dense.dimensions` raises in
+    `Container.create()`, before `ensure_collections()`. Exercised directly against the
+    extracted assertion (not a full `Container.create()`, which needs real Postgres/Redis/
+    Qdrant) using `FakeEmbedder`, whose `embed_dense` produces vectors of exactly its
+    configured `.dimensions` width — a real, deterministic mismatch, not a mock."""
+    embedder = FakeEmbedder(dimensions=8)
+
+    with pytest.raises(ConflictError):
+        await _assert_embedding_dimensions(embedder, expected=384)
+
+    await _assert_embedding_dimensions(embedder, expected=8)  # matching width: no raise
 
 
 async def test_lifespan_closes_pools_in_reverse() -> None:
