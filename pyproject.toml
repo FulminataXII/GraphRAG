@@ -53,6 +53,9 @@ dependencies = [
     "httpx==0.28.1",
     # --- observability extras ---
     "openinference-instrumentation-langchain==0.1.72",
+    # --- document parsing (BO-05) ---
+    "pymupdf==1.28.2",
+    "python-docx==1.2.0",
 ]
 
 [dependency-groups]

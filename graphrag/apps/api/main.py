@@ -360,8 +360,10 @@ def create_app() -> FastAPI:
     FastAPIInstrumentor.instrument_app(app)
     install_exception_handlers(app)
 
-    from graphrag.apps.api.routers import health
+    from graphrag.apps.api.routers import documents, health, jobs
 
     app.include_router(health.router)
+    app.include_router(documents.router)
+    app.include_router(jobs.router)
 
     return app

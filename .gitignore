@@ -14,3 +14,4 @@ debug_bundle_*.md
 reports/
 corpus/
 .DS_Store
+data/uploads/

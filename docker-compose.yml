@@ -9,7 +9,12 @@
 # ~4.75GB total across the 5 core services (qdrant 1g + neo4j 1500m + postgres 512m +
 # redis 256m + litellm 1500m) — measured minimums, not guesses.
 #
-# `worker`/`projection-worker` land in BO-05.
+# `worker`/`projection-worker` (BO-05) share a bind-mounted `./data/uploads` directory with
+# `api`: the worker resolves `IngestDocumentPayload.uri` back to bytes from there. This is a
+# stand-in for real object storage — see `apps/worker/tasks/__init__.py`'s docstring for the
+# spec gap it works around. A bind mount (not a named volume) is deliberate: the CLI's
+# `ingest`/`seed` commands run on the HOST and write into the same `./data/uploads` path, so a
+# host-launched `ingest` and the containerized worker agree on the same files.
 
 services:
   qdrant:
@@ -133,6 +138,8 @@ services:
       GRAPHRAG_STORES__QDRANT__URL: http://qdrant:6333
       GRAPHRAG_STORES__NEO4J__URI: bolt://neo4j:7687
       GRAPHRAG_STORES__REDIS__URL: redis://redis:6379/0
+    volumes:
+      - ./data/uploads:/app/data/uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -156,6 +163,77 @@ services:
       timeout: 3s
       retries: 10
       start_period: 15s
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: [core]
+    command: ["arq", "graphrag.apps.worker.settings.WorkerSettings"]
+    env_file:
+      - .env
+    environment:
+      GRAPHRAG_OBSERVABILITY__OTLP_ENDPOINT: http://otel-collector:4317
+      GRAPHRAG_OBSERVABILITY__TRAIL__LOKI_URL: http://otel-lgtm:3100
+      GRAPHRAG_OBSERVABILITY__TRAIL__TEMPO_URL: http://otel-lgtm:3200
+      GRAPHRAG_STORES__QDRANT__URL: http://qdrant:6333
+      GRAPHRAG_STORES__NEO4J__URI: bolt://neo4j:7687
+      GRAPHRAG_STORES__REDIS__URL: redis://redis:6379/0
+    volumes:
+      - ./data/uploads:/app/data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
+    healthcheck:
+      # arq ships its own health-check mode: it writes a heartbeat key to Redis on every
+      # iteration and `--check` reads it back, so this needs no HTTP endpoint of its own.
+      test: ["CMD", "arq", "graphrag.apps.worker.settings.WorkerSettings", "--check"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  projection-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: [core]
+    command: ["arq", "graphrag.apps.worker.settings.ProjectionWorkerSettings"]
+    env_file:
+      - .env
+    environment:
+      GRAPHRAG_OBSERVABILITY__OTLP_ENDPOINT: http://otel-collector:4317
+      GRAPHRAG_OBSERVABILITY__TRAIL__LOKI_URL: http://otel-lgtm:3100
+      GRAPHRAG_OBSERVABILITY__TRAIL__TEMPO_URL: http://otel-lgtm:3200
+      GRAPHRAG_STORES__QDRANT__URL: http://qdrant:6333
+      GRAPHRAG_STORES__NEO4J__URI: bolt://neo4j:7687
+      GRAPHRAG_STORES__REDIS__URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
+    healthcheck:
+      test:
+        ["CMD", "arq", "graphrag.apps.worker.settings.ProjectionWorkerSettings", "--check"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
 
 volumes:
   qdrant_data:
