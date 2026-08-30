@@ -163,6 +163,9 @@ gap: stop and report it rather than inventing one. Types are declared in exactly
 `Citation` · `Answer` · `Spend` · `NodeFailure` · `RoutePlan` · `DocumentRecord` ·
 `DocumentStatus` · `EntityType`
 
+`core/ids.py` also owns `normalize_for_hash`, `content_hash`, `chunk_id`, `document_id`,
+`entity_id`, `new_correlation_id`.
+
 ### `core/errors.py` — BO-01
 `AppError` and its subclasses (§3.3).
 
@@ -185,6 +188,9 @@ imported from `core`, not redeclared.
 | `ErrorBody`, `ErrorEnvelope` | `apps/api/errors.py` | 03 |
 | `Container`, `ReadyzProber` | `apps/api/main.py` | 03 |
 | `ParsedDocument`, `ChunkSpec` | `services/ingestion/` | 05 |
+| `UploadStorage` (port) | `core/ports.py` | 05 |
+| `LocalDiskUploadStorage` | `adapters/upload_storage.py` | 05 |
+| `SystemClock`, `UlidGenerator` | `adapters/clock.py` | 05 |
 | `MentionOut`, `RelationOut`, `CitationOut`, `EntityExtraction`, `RoutePlanOut`, `RelevanceGrade`, `RelevanceGradeBatch`, `RewrittenQuery`, `AnswerOut`, `Entailment` | `services/orchestration/schemas.py` | 06 |
 | `ResolutionResult` | `services/resolution/service.py` | 07 |
 | `QueryState`, `NodeDeps`, `QueryResult`, `StreamEvent` | `services/orchestration/` | 10 |
@@ -423,6 +429,18 @@ def chunk_id(text: str) -> UUID:
           hash artefact.
         - Identical normalized text ALWAYS yields the same UUID; this is the sole dedup mechanism.
         - Do not substitute a 64-bit integer ID.
+    """
+
+def document_id(raw: bytes) -> UUID:
+    """Content-addressed document identifier.
+
+    Contract:
+        - uuid.UUID(bytes=sha256(raw).digest()[:16], version=5) over the RAW FILE BYTES,
+          not normalized text — two files differing only in whitespace are different documents.
+        - Byte-identical uploads yield the same doc_id, so `register()` returns False and the
+          API answers 200 with the existing id instead of 202 with a new job.
+        - Lives HERE, not in services/ingestion: it is the same content-addressing family as
+          chunk_id and entity_id, and DocumentRecord's docstring (§3.2) describes it.
     """
 
 def entity_id(canonical_name: str, entity_type: str) -> UUID:
@@ -707,6 +725,11 @@ class GraphStore(Protocol):
               would silently fail `verify_citations`, so this is not optional.
             - This is both the graph retrieval hydration path AND the vector-outage fallback.
         """
+    async def delete_chunks(self, chunk_ids: Sequence[UUID]) -> None:
+        """Remove orphaned chunks and their MENTIONS edges. Entities are NOT deleted — an
+        entity outlives any one chunk. Needed by ProjectionService, whose contract removes a
+        zero-source chunk from BOTH stores; without this the graph keeps text that no document
+        claims, and a graph-path answer can cite a deleted source."""
     async def delete_document(self, doc_id: str) -> None: ...
     async def health(self) -> bool: ...
 
@@ -735,6 +758,22 @@ class DocumentLedger(Protocol):
     async def get(self, doc_id: str) -> DocumentRecord | None: ...
     async def bump_corpus_version(self) -> int: ...
     async def current_corpus_version(self) -> int: ...
+    # NOTE: there is deliberately no row-removal method. A deleted document terminates at
+    # status=DELETING and its ledger row is retained. The row is the audit trail — it records
+    # that this sha256 was ingested and later removed, which is what stops a re-upload from
+    # looking like a first-time ingest. Storage cost is one row per document.
+
+class UploadStorage(Protocol):
+    """Moves uploaded bytes from the API process to the worker process.
+
+    JobEnvelope must stay JSON-serializable, so it carries a `uri`, not bytes — something has to
+    hold the file in between. See §6.0b for the LocalDiskUploadStorage implementation and its
+    limits.
+    """
+    async def put(self, doc_id: str, raw: bytes, *, mime_type: str) -> str:
+        """Store and return a uri. Idempotent: same doc_id + same bytes is a no-op."""
+    async def get(self, uri: str) -> bytes: ...
+    async def delete(self, uri: str) -> None: ...
 
 class SourceRegistry(Protocol):
     """Authoritative provenance store. Postgres PK(chunk_id, doc_id) arbitrates concurrency."""
@@ -1106,6 +1145,19 @@ class Neo4jGraphStore:
 
 ### 5.4 `adapters/postgres/`
 
+> ⚠️ **Three databases on one Postgres instance: `graphrag`, `litellm`, `phoenix`.**
+> Provisioned by `postgres/init/01-databases.sql` mounted at `/docker-entrypoint-initdb.d/`,
+> which runs only on an empty volume. Each tool migrates its own database independently — the
+> point is not name collisions but **independent recovery**: sharing one database means a tool
+> with bad migration state cannot be reset without destroying the others' tables.
+>
+> Two things about that init script:
+> - Postgres pipes `.sql` init files straight to psql with **no shell**, so `${POSTGRES_USER}`
+>   is not expanded — only `.sh` scripts get env substitution. Omit `OWNER` entirely; the script
+>   already runs as the right role, so `CREATE DATABASE` defaults correctly.
+> - It never runs on an existing volume. Adding a database later means a manual
+>   `CREATE DATABASE`, which is non-destructive and preferable to `down -v`.
+>
 > ⚠️ **All graphrag tables live in a dedicated `graphrag` schema, never `public`.**
 > One Postgres instance serves three consumers (ARCHITECTURE §4.2): LiteLLM creates its own
 > virtual-key and spend tables, Phoenix creates its trace tables — including an `api_keys` table
@@ -1129,8 +1181,10 @@ class Neo4jGraphStore:
 
 `ledger.py`:
 ```python
-class PostgresDocumentLedger:   # implements DocumentLedger
-    """Contract:
+class PostgresDocumentLedger:
+    """Implements DocumentLedger.
+
+    Contract:
         - register() uses INSERT ... ON CONFLICT (sha256) DO NOTHING; returns rowcount == 1.
         - set_status() validates the transition against the DocumentStatus state machine and
           raises ConflictError on an illegal move (e.g. INDEXED -> PARSING).
@@ -1140,8 +1194,10 @@ class PostgresDocumentLedger:   # implements DocumentLedger
 ```
 `sources.py`:
 ```python
-class PostgresSourceRegistry:   # implements SourceRegistry
-    """Contract:
+class PostgresSourceRegistry:
+    """Implements SourceRegistry.
+
+    Contract:
         - add() is one executemany INSERT ... ON CONFLICT (chunk_id, doc_id) DO NOTHING.
           Safe under unlimited worker concurrency; no lock, no shard.
         - remove_document() returns affected chunk_ids so the caller can re-project.
@@ -1162,6 +1218,23 @@ class PostgresEvalStore:
 > the breaker opens on transient noise. Retries use exponential backoff **with full jitter** —
 > without jitter, every client that backed off together retries together and re-floors the
 > service that just recovered.
+
+### 5.4b `adapters/clock.py`
+
+```python
+class SystemClock:
+    """Implements Clock. The only place `datetime.now()` is called in production code.
+
+    Contract:
+        - now() returns a timezone-aware UTC datetime (`datetime.now(UTC)`), never naive.
+        - Stateless and trivially constructed; injected wherever core/services need the time,
+          so tests substitute FakeClock and stay deterministic.
+    """
+    def now(self) -> datetime: ...
+
+class UlidGenerator:
+    """Implements IdGenerator. Delegates to core.ids.new_correlation_id()."""
+```
 
 ### 5.5 `adapters/redis_cache.py`
 
@@ -1235,6 +1308,29 @@ def restore_context(envelope: JobEnvelope[Any]) -> Context:
 
 ## 6. `graphrag/services/` — use cases, no I/O libraries
 
+### 6.0b `adapters/upload_storage.py`
+
+The `UploadStorage` Protocol is declared in `core/ports.py` (§3.5). This is its implementation.
+
+```python
+class LocalDiskUploadStorage:
+    """Implements UploadStorage. MVP backend; uri scheme `file:///data/uploads/<doc_id>`.
+
+    Contract:
+        - Backed by a Docker volume mounted at the same path in `api`, `worker` and
+          `projection-worker`. All three must mount it or the worker gets FileNotFoundError.
+        - Writes atomically: temp file + os.replace, so a crashed API never leaves a partial
+          file a worker could parse.
+        - delete() is called by DeletionService after the document is removed from both stores.
+    """
+```
+
+> **This is a stopgap, and the README should say so.** A shared local volume does not survive
+> multi-host deployment — the moment `api` and `worker` run on different machines it breaks. The
+> T2 replacement is S3-compatible object storage (MinIO locally, R2/S3 in production) behind the
+> same `UploadStorage` port, which is exactly why the port exists rather than the service calling
+> `open()` directly. Swapping it is one adapter.
+
 ### 6.1 `services/ingestion/`
 
 ```python
@@ -1280,9 +1376,18 @@ class IngestionService:
     """Orchestrates one document through parse -> chunk -> embed -> store -> register sources.
 
     Dependencies (constructor): DocumentParser, Embedder, VectorStore, GraphStore,
-                                SourceRegistry, DocumentLedger, JobQueue, Clock
+                                SourceRegistry, DocumentLedger, JobQueue, UploadStorage, Clock
 
-    Contract of ingest(doc_id, raw, mime_type, uri):
+    Signature:
+        async def ingest(self, *, doc_id: str, uri: str, mime_type: str,
+                         correlation_id: str) -> None
+
+        correlation_id is REQUIRED: the service enqueues follow-on jobs (project_chunk_payload,
+        extract_entities) and every JobEnvelope carries it, so the whole ingestion fans out under
+        one correlation id. Bytes are fetched via UploadStorage.get(uri), not passed in — the
+        service runs in the worker, and the payload crossed the queue as JSON.
+
+    Contract of ingest(...):
         1. parse -> chunk -> compute chunk_id per chunk (content-addressed)
         2. Deduplicate chunk_ids WITHIN this document before any store call.
         3. Embed only chunk_ids not already present in the vector store.
@@ -1309,12 +1414,21 @@ class ProjectionService:
     """
 
 class DeletionService:
-    """Contract of delete(doc_id):
-        - SourceRegistry.remove_document(doc_id) -> affected chunk_ids
-        - ProjectionService.project(affected)   (removes orphans from both stores)
-        - GraphStore.delete_document(doc_id)
-        - Ledger status -> DELETING then removed; bump_corpus_version
-        - Runs as a background job only. Never called from a request handler.
+    """Contract of delete(doc_id), in this order — the order matters:
+        1. Ledger status -> DELETING (so a concurrent re-upload sees the in-flight deletion)
+        2. SourceRegistry.remove_document(doc_id) -> affected chunk_ids
+        3. ProjectionService.project(affected) — re-derives payloads; chunks whose last source
+           just went away are removed from BOTH VectorStore and GraphStore
+        4. GraphStore.delete_document(doc_id) — the Document node and its HAS_CHUNK edges.
+           Entities are NOT deleted: an entity outlives any one document
+        5. UploadStorage.delete(uri) — the stored bytes. Skipping this leaks a file per deleted
+           document, invisibly, until the volume fills
+        6. bump_corpus_version() — invalidates the retrieval cache, which is keyed on it
+
+        - The ledger ROW is retained at status=DELETING; see the DocumentLedger note in §3.5.
+        - Idempotent: re-running on an already-deleted doc_id is a no-op at every step.
+        - Runs as a background job only. Never called from a request handler — steps 2-3 are a
+          scroll-and-rewrite loop that will exceed an HTTP timeout on a large document.
     """
 ```
 
@@ -1472,13 +1586,57 @@ def remaining(state: QueryState, limits: BudgetLimits) -> BudgetLimits:
     """limits - state['spent']. Computed on read, never stored."""
 
 # schemas.py — LLM output contracts. Every one is validated; none is trusted.
-class RoutePlanOut(BaseModel): strategy: ...; seed_entities: ...; hops: ...; sub_queries: ...; rationale: ...
-class RelevanceGrade(BaseModel): chunk_id: UUID; relevant: bool; reason: str
+#
+# Rules for ALL *Out schemas:
+#   - Identifiers are `str`, never UUID. The model emits text; the NODE converts and validates.
+#     A UUID-typed field turns a hallucinated id into a parse failure and burns a repair attempt,
+#     when the right handling is a deterministic membership check (verify_citations).
+#   - Every field has an explicit description= — it becomes the JSON-schema description the
+#     provider sees, and is the cheapest quality lever available.
+#   - Bounded fields carry constraints (Literal, ge/le, max_length) so a malformed value fails
+#     validation instead of flowing downstream.
+#   - No Optional fields. An absent value the model chose not to emit is indistinguishable from
+#     one it couldn't determine; require it and let the repair loop handle refusal.
+
+class MentionOut(BaseModel):
+    surface: str = Field(max_length=200, description="Exact text as it appears in the chunk")
+    type: EntityType
+    char_start: int = Field(ge=0); char_end: int = Field(ge=0)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+class RelationOut(BaseModel):
+    src_surface: str; dst_surface: str      # surfaces, NOT ids — resolution assigns ids later
+    type: str = Field(max_length=64, description="UPPER_SNAKE verb phrase, e.g. ACQUIRED")
+    confidence: float = Field(ge=0.0, le=1.0)
+    evidence_span: str = Field(max_length=500, description="Verbatim sentence supporting this")
+
+class CitationOut(BaseModel):
+    chunk_id: str = Field(description="Exactly one of the ids given in the context block")
+    quote: str | None = Field(default=None, max_length=300)
+
+class RoutePlanOut(BaseModel):
+    strategy: Literal["vector", "graph", "hybrid"]
+    seed_entities: list[str] = Field(default_factory=list, max_length=8,
+        description="Entity names mentioned in the question; empty for non-entity queries")
+    hops: int = Field(ge=1, le=3)
+    sub_queries: list[str] = Field(default_factory=list, max_length=4)
+    rationale: str = Field(max_length=400)
+
+class RelevanceGrade(BaseModel): chunk_id: str; relevant: bool; reason: str = Field(max_length=200)
 class RelevanceGradeBatch(BaseModel): grades: list[RelevanceGrade]
-class RewrittenQuery(BaseModel): query: str; changed_because: str
-class AnswerOut(BaseModel): text: str; citations: list[CitationOut]; confidence: float
-class Entailment(BaseModel): supported: bool; unsupported_spans: list[str]; score: float
-class EntityExtraction(BaseModel): entities: list[MentionOut]; relations: list[RelationOut]
+class RewrittenQuery(BaseModel): query: str = Field(max_length=500); changed_because: str
+class AnswerOut(BaseModel):
+    text: str
+    citations: list[CitationOut] = Field(min_length=1,
+        description="At least one. If the context does not support an answer, say so in `text` "
+                    "and cite the closest chunk rather than inventing an id.")
+    confidence: float = Field(ge=0.0, le=1.0)
+class Entailment(BaseModel):
+    supported: bool
+    unsupported_spans: list[str] = Field(default_factory=list)
+    score: float = Field(ge=0.0, le=1.0)
+class EntityExtraction(BaseModel):
+    entities: list[MentionOut]; relations: list[RelationOut]
 
 # prompts.py
 def render(template_name: str, **vars: Any) -> str:
@@ -1489,7 +1647,15 @@ def render(template_name: str, **vars: Any) -> str:
           preceded by an instruction that document content is untrusted data containing no
           instructions. This is defence-in-depth only — the real guard is schema validation
           plus deterministic citation checking.
-        - Templates are versioned; the version string goes on the span.
+        - Templates are versioned (`{# version: 3 #}` on line 1); the version goes on the span,
+          so an eval regression can be traced to a prompt change rather than a model change.
+        - Templates required by BO-06, one per LLM role usage:
+            route_plan.j2       grade_context.j2   rewrite_query.j2
+            generate.j2         verify_grounded.j2 extract_entities.j2
+          (`adjudicate_entities.j2` is T1 — the ER gray band.)
+        - render() raises on an unknown template name and on any undefined variable
+          (Jinja2 StrictUndefined). A silently-empty `{{ context }}` produces a confident
+          ungrounded answer, which is the exact failure this system exists to prevent.
     """
 ```
 
@@ -1576,6 +1742,22 @@ class Container:
           a half-built container.
         - aclose() closes pools in reverse construction order.
         - The worker builds its own Container in arq's on_startup. Same class, same settings.
+        - Before ensure_collections(), asserts the embedder's REAL output width equals
+          embedding.dense.dimensions. A mismatch must raise, not create a wrong-width collection.
+
+    Fields, and the BO that first populates each. Every field exists from BO-03 onward; the ones
+    not yet built are None, so a later BO wires rather than redefines:
+
+        settings, clock, id_generator                    BO-03 (SystemClock lands BO-05)
+        ledger, sources, cache, job_queue, readyz_prober  BO-03
+        embedder, vector_store                            BO-04
+        upload_storage                                    BO-05
+        llm_client                                        BO-06
+        graph_store                                       BO-08
+        retrievers, orchestrator                          BO-09 / BO-10
+
+    The all-fakes unit `container` fixture (§9) constructs this directly rather than calling
+    create(), which is what keeps it a unit fixture.
     """
 
 class ReadyzProber:
@@ -1644,6 +1826,11 @@ class WorkerSettings:
         - on_startup builds the Container and stores it on ctx; on_shutdown closes it.
         - max_jobs = ingestion.parallelism.max_concurrent_docs
         - retry_jobs=True, max_tries from ingestion.dead_letter.max_attempts
+        - **health_check_interval MUST be set explicitly** (10s). arq defaults it to 3600s, so
+          the Redis health sentinel the worker writes does not exist for up to an hour after
+          startup. A compose healthcheck polling every 15s then never sees it and the container
+          sits in `health: starting` forever — with no error anywhere, because nothing is
+          actually wrong with the worker.
     """
 
 class ProjectionWorkerSettings:
@@ -1653,7 +1840,28 @@ class ProjectionWorkerSettings:
         - queue_name = ingestion.payload_projection.queue_name
         - max_jobs = 1. This single value is what removes the read-modify-write race;
           any value > 1 reintroduces it.
+        - health_check_interval = 10, same requirement as WorkerSettings above.
     """
+
+> **Worker healthchecks probe Redis, not HTTP.** An arq worker serves no HTTP, so the API's
+> healthcheck cannot be reused. Use arq's own sentinel check, which exits 0 when healthy and 1
+> when not:
+> ```yaml
+> healthcheck:
+>   test: ["CMD", "arq", "--check", "graphrag.apps.worker.settings.WorkerSettings"]
+>   interval: 15s
+>   timeout: 10s
+>   retries: 5
+>   start_period: 30s
+> ```
+> **`health_check_interval` must be shorter than the compose `interval`** (10s < 15s). Invert
+> them and the sentinel expires between probes, so the container flaps between healthy and
+> unhealthy for no reason.
+>
+> Also drop `EXPOSE 8000` from the shared Dockerfile. The image serves three entrypoints and only
+> `api` listens on a port; leaving it makes `docker compose ps` show `8000/tcp` for the workers,
+> which sends you looking for an HTTP server that was never supposed to exist. `api`'s
+> `ports: ["8000:8000"]` in compose publishes and documents the port independently of EXPOSE.
 
 # tasks/ingest.py, tasks/project.py, tasks/delete.py, tasks/extract.py, tasks/resolve.py
 # One task per file. Every task has this exact shape:

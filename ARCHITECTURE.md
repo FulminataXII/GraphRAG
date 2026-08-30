@@ -168,18 +168,15 @@ sequenceDiagram
     API->>Q: enqueue ingest_document{doc_id, traceparent, correlation_id}
     API-->>C: 202 {job_id, doc_id, correlation_id}
 
-    W->>W: parse → normalize → chunk
+    W->>W: fetch bytes from upload storage → parse → normalize → chunk
     loop per chunk
-        W->>W: chunk_id = uuid5(sha256(normalize(text)))
-        W->>QD: retrieve(chunk_id)
-        alt exists (duplicate paragraph across docs)
-            W->>QD: set_payload: sources[] += {doc_id, uri, offsets}
-            Note over W,QD: under Redis lock chunk:{id} — read-modify-write
-        else new
-            W->>QD: upsert(dense + sparse vectors, sources=[this doc])
-        end
+        W->>W: chunk_id = UUID(bytes=sha256(normalize(text))[:16], version=5)
+        W->>QD: upsert dense+sparse ONLY if the point is new (content-addressed)
+        W->>PG: INSERT chunk_sources (chunk_id, doc_id, ...) ON CONFLICT DO NOTHING
+        Note over W,PG: Postgres PK(chunk_id, doc_id) arbitrates concurrency.<br/>No lock, no shard — the DB is the single writer of record.
     end
-    W->>Q: enqueue extract_entities
+    W->>Q: enqueue project_chunk_payload (queue: projection, max_jobs=1)
+    Note over Q,QD: A SEPARATE single-concurrency worker re-derives Qdrant's<br/>sources[] and doc_ids[] FROM Postgres. Ingestion never writes them.
     W->>W: LLM extract → EntityExtraction schema (validated)
     W->>W: normalize → block via entities collection (vector kNN)<br/>→ score (RapidFuzz + cosine + type gate)<br/>→ union-find cluster → canonical_id
     W->>NEO: MERGE Entity/Chunk/Document + edges w/ {chunk_id, doc_id, confidence}
@@ -627,7 +624,12 @@ and it is a genuinely uncommon thing to see in a student project.
 | **Qdrant** | Free/Apache-2.0, single container. Decisive feature: **named vectors** (dense + sparse in one point) and the **Universal Query API** doing `prefetch` + server-side `RrfQuery` — hybrid search in one call, no client-side fusion code. Payload arrays + `set_payload` give you the multi-source retention requirement natively; payload indexes on `sources[].doc_id` make refcounted deletes O(log n). | [Hybrid Queries](https://qdrant.tech/documentation/search/hybrid-queries/), [Hybrid Search w/ Query API](https://qdrant.tech/articles/hybrid-search/) |
 | **Neo4j Community Edition** | Highest recruiter recognition, best Cypher tooling and docs, Neo4j Browser is a *fantastic demo prop*. **Caveats you must state in the README:** GPLv3 copyleft, single instance only (no clustering), no RBAC/online backup. All fine for an MVP; all disqualifying for some employers — knowing that is the point. | [Neo4j CE licensing/limits](https://flur.ee/blog/neo4j-alternatives), [OSS graph DB comparison](https://arcadedb.com/blog/open-source-knowledge-graph-graphrag-databases-compared/) |
 | *(alt) Memgraph / FalkorDB* | Considered. Memgraph = BSL, in-memory, Cypher-compatible, lower latency; FalkorDB = SSPL, GraphBLAS, explicitly GraphRAG-targeted and very light. **Rejected for T0 on ecosystem/recognition, not merit** — say exactly this if asked. | same as above |
-| **PostgreSQL 16** | You need it anyway: LiteLLM's proxy requires Postgres for virtual keys + spend logs, and Phoenix's recommended backend is Postgres (SQLite loses data without a volume and serializes writes). One container serves three consumers. Also the natural home for the ingestion ledger + idempotency + eval runs. | [LiteLLM proxy setup](https://docs.litellm.ai/docs/), [Phoenix deployment](https://railway.com/deploy/phoenix) |
+| **PostgreSQL 16** | You need it anyway: LiteLLM's proxy requires Postgres for virtual keys + spend logs, and Phoenix's recommended backend is Postgres (SQLite loses data without a volume and serializes writes). One container, **three separate databases** — `graphrag`, `litellm`, `phoenix`. Not three
+consumers of one database: each tool runs its own migrations (Alembic for graphrag and Phoenix,
+Prisma for LiteLLM), and sharing a database means you cannot reset one without destroying the
+others' tables. That matters the first time a tool's migration state goes bad. Within its own
+database graphrag additionally uses a `graphrag` schema, so its Alembic version table can never be
+confused with anyone else's. Also the natural home for the ingestion ledger + idempotency + eval runs. | [LiteLLM proxy setup](https://docs.litellm.ai/docs/), [Phoenix deployment](https://railway.com/deploy/phoenix) |
 | **Redis 7** | Four jobs, one container: ARQ broker, distributed locks (chunk read-modify-write), token buckets (per-API-key rate limit), and the cache tiers in §6.4. | — |
 | **fastembed + `bge-small-en-v1.5`** | ONNX runtime, CPU-only, no torch — keeps the image ~500 MB instead of ~4 GB. 384-dim, 33M params, strong MTEB retrieval for its size. Native Qdrant integration. **Embeddings must be free and local** or the free LLM tiers get consumed by embedding calls. | fastembed / Qdrant docs |
 | **BM25 sparse (`Qdrant/bm25`)** | Free lexical signal; catches exact IDs, part numbers, acronyms that dense retrieval misses. Sparse can legitimately return *zero* results — RRF handles that gracefully. **How it actually works** (worth knowing precisely, because it's a common interview trap): fastembed computes only the *term-frequency* component client-side — it's stateless and has no corpus view — while Qdrant computes *inverse document frequency* at query time from live collection statistics, maintained at collection level, enabled by `Modifier.IDF`. So "a stateless embedder can't do BM25" is half-true: the split is deliberate. Since Qdrant 1.15.2 the conversion can also happen server-side. `miniCOIL` is Qdrant's current recommendation for new projects if you want BM25-like exact matching with contextual awareness. | [fastembed `bm25.py`](https://github.com/qdrant/fastembed/blob/main/fastembed/sparse/bm25.py), [Qdrant sparse retrieval](https://qdrant.tech/course/essentials/day-3/sparse-retrieval-demo/) |
@@ -1171,7 +1173,18 @@ put Text2Cypher behind a feature flag in T1 if there's time.
 1. A 30-second GIF: query → SSE stream showing `plan_route → retrieve ∥ → grade → generate → verify` → answer with clickable citations.
 2. The Grafana trace screenshot showing **one trace** spanning API → queue → worker → LiteLLM → Gemini.
 3. The eval table: retrieval Recall@10, faithfulness, routing accuracy, **refusal rate on unanswerable questions**.
-4. A "Known limitations & roadmap" section naming: no community detection, Neo4j CE single-node/GPLv3, ER gray-band unresolved in T0, free-tier rate limits.
+4. A "Known limitations & roadmap" section naming: no community detection, Neo4j CE
+   single-node/GPLv3, ER gray-band unresolved in T0, free-tier rate limits, and **no table or
+   numeric-fact support**.
+
+On that last one, be specific — it's the limitation that most clearly shows you understand your
+own retrieval model. Character-based chunking has no notion of table structure; a PDF table
+flattens to 1D and loses the row/column headers that give a cell meaning; and the graph models
+`Entity`/`Relation`, not `(measure, period, unit, value)`. The honest consequence is worth
+stating: on a table-heavy corpus this system produces fluent wrong numbers rather than refusing,
+because the retrieved chunk is genuinely relevant and `verify_citations` passes. The T2 fix is
+table-aware parsing that serializes each table to markdown as its own atomic chunk, plus a
+`Measure` node type carrying period and unit.
 
 That fourth item is worth more in an interview than any feature. Engineers who can enumerate what
 their system *doesn't* do are the ones who get hired.

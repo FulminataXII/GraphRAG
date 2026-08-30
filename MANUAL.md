@@ -12,24 +12,44 @@ For you, not the agent. What you do, what to expect, and where to intervene.
 Start each build order in a **fresh Claude Code session**, launched from your project directory
 in the **Ubuntu (WSL2) terminal** — see M-0. Give it exactly this:
 
-> `BUILD_ORDER.md` tells you what to build; `BLUEPRINT.md` is the authoritative spec for every
-> name, signature and contract. Read `ARCHITECTURE.md` only for rationale when a contract looks
-> arbitrary — where the two disagree, BLUEPRINT wins, and report the disagreement. Never
-> implement anything from ARCHITECTURE's Appendix A: it documents rejected designs on purpose.
+> **Scope.** Implement **BO-0X only**. Do not implement, stub, or scaffold components belonging
+> to other build orders. If a BO-0X test appears to require a component from a later BO, say so
+> and skip that test rather than building ahead.
 >
-> Implement **BO-0X** only. Do not implement components from other build orders.
-> Follow each component's contract in BLUEPRINT exactly. Consult BLUEPRINT §1a (Type Index)
-> before referencing any type; if one you need isn't listed, that is a spec gap — report it
-> rather than inventing it.
+> **Sources of truth.** `BUILD_ORDER.md` says what to build. `BLUEPRINT.md` is authoritative for
+> every name, signature, and contract — follow it exactly. Check §1a (Type Index) before
+> referencing any type; if one you need isn't listed, that's a spec gap: report it, don't invent
+> it. Read `ARCHITECTURE.md` only for rationale when a contract looks arbitrary. Where the two
+> disagree, BLUEPRINT wins and the disagreement is a defect worth reporting. Never implement
+> anything from ARCHITECTURE's Appendix A — it documents rejected designs on purpose.
 >
-> **The spec files are read-only.** `ARCHITECTURE.md`, `BLUEPRINT.md`, `BUILD_ORDER.md`,
-> `MANUAL.md` and `config.example.yaml` must never be edited. If you find an error, ambiguity
-> or gap, report it and continue with the rest of the build order — or stop if it blocks you.
-> Corrections are applied upstream and synced back into the repo.
+> **Depend on ports, not implementations.** To learn how another component behaves, read its
+> contract in BLUEPRINT and the Protocol in `core/ports.py`. Do not read adapter source
+> (`qdrant_store.py`, `neo4j_store.py`, `litellm_client.py`) to write a caller — if the contract
+> is insufficient, that's a spec gap to report. Reading tooling (`Makefile`, `conftest.py`,
+> `scripts/`, config) is fine and expected.
 >
-> Write the BO's tests after the components. Run `make lint && make test`.
-> Report which gate tests `[G]` pass, individually.
-> If a contract is ambiguous or a dependency is missing, stop and ask — do not guess.
+> **Read-only files.** `ARCHITECTURE.md`, `BLUEPRINT.md`, `BUILD_ORDER.md`, `MANUAL.md` and
+> `config.example.yaml` must never be edited. Report errors, ambiguities and gaps; corrections
+> are applied upstream and synced back.
+>
+> **Work in this checkout.** Do not create a git worktree or a new branch. Commit nothing and
+> tag nothing — leave changes in the working tree for me to review and commit.
+>
+> **Changing enforcement infrastructure** — `scripts/check_layering.py`, the `Makefile` lint
+> target, ruff/mypy config in `pyproject.toml`, or fixtures in `tests/conftest.py` — requires
+> stating up front what rule changed and why. Never loosen a check to make a build order pass.
+>
+> **Verify external facts.** Any image tag, package version, model name, or API endpoint must be
+> confirmed to exist (registry, docs, or a live call) before you pin it. Do not write a version
+> number from memory.
+>
+> **Finish with:** write the BO's tests after the components, then run `make lint && make test`.
+> Report: the unit and integration test counts, each `[G]` gate test individually by name with
+> its result, and every spec gap or judgment call you made. If a test fails for a reason outside
+> this BO, say so and leave it — do not fix out-of-scope code.
+>
+> If a contract is ambiguous or a dependency is missing, stop and ask. Do not guess.
 
 Fresh sessions matter: each BO is self-contained by design, and a long session accumulates stale
 assumptions that quietly override the blueprint. "Fresh" means a **new conversation**, in the same
@@ -422,8 +442,43 @@ Requirements:
 - **Real multi-hop facts**: A relates to B, B relates to C, and no single document states A→C.
 - Mixed formats: PDF, DOCX, TXT, MD.
 
-Good sources: company annual reports, Wikipedia exports on a connected topic, open-access papers
-from one research group. **Avoid anything confidential** — free LLM tiers may train on prompts.
+#### What kind of documents — this matters more than it looks
+
+This system answers **multi-hop questions about relationships between named things**. It is not a
+table reader. Pick documents where the interesting facts are entities and the links between them,
+in prose.
+
+> 🚫 **Do not use SEC filings, 10-Qs, annual reports, or anything table-heavy.** Four reasons that
+> compound: chunking splits on paragraph/sentence boundaries, which a table doesn't have, so rows
+> get sliced arbitrarily; a PDF table flattens to one-dimensional text, so `Net sales 94,930
+> 90,753` loses which column is which period; answering "Q3 services revenue" needs a *2D join*
+> between the row header on the left and the column header on top, and neither survives chunking;
+> and the graph schema models `Entity`/`Relation`, not `(measure, period, unit, value)`.
+>
+> The failure mode is the dangerous one. The system won't refuse — it will retrieve a chunk with
+> the right words and plausible numbers and generate a fluent wrong answer. `verify_citations`
+> won't catch it, because the chunk really was retrieved. You'd be demoing a hallucination.
+
+**Best choice: press releases from one industry ecosystem** (12–15, from company newsrooms). They
+satisfy the M-2 checklist naturally rather than by construction:
+
+| Requirement | How press releases give it for free |
+|---|---|
+| Verbatim shared paragraph | The boilerplate "About Acme Corp" block repeats identically across every release from that company — authentic source retention, not a planted copy-paste |
+| Entity surface variants | "Acme Corporation" in the legal footer, "Acme Corp." in the header, "Acme" in the body |
+| Multi-hop facts | Release 1: Acme acquires Beta. Release 2: Beta partnered with Gamma. Nothing states Acme→Gamma — exactly what the graph path is for |
+| Hub entity | The acquiring company appears in most of them |
+
+**Also good:** Wikipedia articles on a connected domain (12 companies in a sector plus their
+founders) — clean prose, dense entities, genuine multi-hop. Open-access papers from one research
+group — authors and citations as edges, and related-work sections often reuse text.
+
+**Avoid:** SEC filings and financial reports, spreadsheets exported to PDF, API documentation,
+heavily clause-numbered contracts, and **anything confidential** — free LLM tiers may train on
+prompts.
+
+If a document is mostly prose with an occasional small table, that's fine; the prose carries the
+answer. The problem is corpora where the *answers live in the tables*.
 
 > This is the highest-leverage hour in the project. A weak corpus makes every downstream metric
 > meaningless and you will not notice until BO-11.
@@ -789,6 +844,9 @@ LF. Reserve pasted heredocs for cases where you'll check with `file` afterwards.
 | Ports bound but nothing responds | Docker publishes to the Windows host; from Ubuntu use `localhost`, which WSL2 forwards. If it fails, check `localhostForwarding=true` in `.wslconfig` |
 | `IsADirectoryError` on a mounted config | Docker created a directory because the file was missing. See Docker trap 1 above |
 | A service is "healthy" but the app can't reach it | You ran `docker compose ps` without `--all` and a crashed container is invisible. See trap 2 |
+| Phoenix exits with `PhoenixMigrationError` | A floating image tag moved under an existing schema. Pin by digest; give Phoenix its own database so it can be reset without touching LiteLLM's tables |
+| A stack-health check passes while a service is dead | The check can't see it. Two causes seen so far: missing `--all` (crashed containers hidden) and missing `-f docker-compose.obs.yml` (obs services never enumerated) |
+| A worker sits in `health: starting` forever, no errors | The healthcheck is probing something the process doesn't do. arq workers serve no HTTP — probe `arq --check`. And set `health_check_interval` (arq defaults to 3600s), shorter than the compose `interval` |
 | `test_stack_healthy` fails only on litellm | Missing `litellm/config.yaml` stub, healthcheck hitting `/health` instead of `/health/liveliness`, or `mem_limit` under 1500m. See traps 3, 4 and 5 |
 | Container restarts with empty logs, exit code 137 | OOMKilled. `docker inspect --format='{{.State.OOMKilled}}' <name>` confirms it. Raise `mem_limit`; see trap 5 |
 | Integration test can't find `docker-compose.yml` | A test fixture chdir'd away from the repo root. Isolation fixtures must skip tests marked `integration` |
