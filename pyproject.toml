@@ -39,6 +39,7 @@ dependencies = [
     # --- llm gateway client (openai-compatible, points at the litellm proxy) ---
     "openai==3.5.0",
     # --- orchestration ---
+    "jinja2==3.1.6",
     "langgraph==1.2.11",
     "langgraph-checkpoint-postgres==3.1.2",
     # --- entity resolution ---

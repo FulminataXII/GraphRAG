@@ -1,10 +1,9 @@
 # Core data plane + gateway. `docker compose --profile core up -d`.
 #
-# NOTE on `litellm`: this BO (BO-00, skeleton only) declares the container so the compose
-# topology is complete from day one. `litellm/config.yaml` here is a deliberate BO-00 stub
-# (one placeholder model, no real provider key) — just enough for the container to boot and
-# reach healthy. BO-06 replaces it with the real model_list, key rotation, fallback chains,
-# rpm/tpm caps and the OTel callback; no app service calls the gateway yet either.
+# NOTE on `litellm`: BO-00 (skeleton only) declared the container with a stub config so the
+# compose topology was complete from day one. BO-06 replaces `litellm/config.yaml` with the real
+# model_list, key rotation, fallback chains, rpm/tpm caps and the OTel callback, and wires
+# `llm_client` into the app — see litellm/config.yaml and graphrag/apps/api/main.py.
 #
 # ~4.75GB total across the 5 core services (qdrant 1g + neo4j 1500m + postgres 512m +
 # redis 256m + litellm 1500m) — measured minimums, not guesses.
@@ -101,6 +100,18 @@ services:
       # comment: each tool sharing this Postgres instance gets its own database so none can be
       # reset/migrated at the expense of the others' tables.
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/litellm
+      # Provider keys — ONLY this container ever sees them (BO-06). api/worker hold only
+      # secrets.litellm_virtual_key; see .env.example's header comment.
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      GROQ_API_KEY_2: ${GROQ_API_KEY_2}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      # OTel callback (litellm/config.yaml's `litellm_settings.callbacks: ["otel"]`) reads these
+      # standard OTel env vars directly — this is a third-party binary, not our app, so it does
+      # NOT go through graphrag/adapters/telemetry/otel.py or a GRAPHRAG_-prefixed setting.
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_SERVICE_NAME: litellm
     volumes:
       - ./litellm/config.yaml:/app/config.yaml:ro
     command: ["--config", "/app/config.yaml", "--port", "4000"]
@@ -111,14 +122,15 @@ services:
     healthcheck:
       # The image is Chainguard wolfi-base, which ships no curl/wget — a shell-based probe
       # can't work here. Use the Python interpreter that's already in the image instead.
-      # /health/liveliness (not /health) is deliberate: /health probes every configured
-      # provider and would fail against the placeholder key in this BO's stub config.
+      # /health/readiness (not /health/liveliness) now that real provider keys are configured
+      # (BO-06) — readiness actually calls each configured model_list deployment once, which is
+      # exactly the check worth failing on; liveliness only proved the process was up.
       test:
         [
           "CMD",
           "python",
           "-c",
-          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:4000/health/liveliness', timeout=3).status==200 else 1)",
+          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:4000/health/readiness', timeout=3).status==200 else 1)",
         ]
       interval: 10s
       timeout: 5s
@@ -132,9 +144,19 @@ services:
     profiles: [core]
     ports:
       - "8000:8000"
-    env_file:
-      - .env
     environment:
+      # Explicit GRAPHRAG_SECRETS__* passthrough (BO-06), NOT `env_file: .env` — that would
+      # blanket-inject the WHOLE .env file, including GEMINI_API_KEY/GROQ_API_KEY*/
+      # OPENROUTER_API_KEY (litellm-container-only; see .env.example's header comment), straight
+      # into this process's environment. `Settings`' env_prefix="GRAPHRAG_" means it wouldn't
+      # READ those unprefixed vars, but they'd still be sitting in os.environ, which is exactly
+      # what test_no_provider_key_in_app_env exists to catch.
+      APP_ENV: ${APP_ENV}
+      GRAPHRAG_SECRETS__POSTGRES_DSN: ${GRAPHRAG_SECRETS__POSTGRES_DSN}
+      GRAPHRAG_SECRETS__LITELLM_MASTER_KEY: ${GRAPHRAG_SECRETS__LITELLM_MASTER_KEY}
+      GRAPHRAG_SECRETS__LITELLM_VIRTUAL_KEY: ${GRAPHRAG_SECRETS__LITELLM_VIRTUAL_KEY}
+      GRAPHRAG_SECRETS__NEO4J_PASSWORD: ${GRAPHRAG_SECRETS__NEO4J_PASSWORD}
+      GRAPHRAG_SECRETS__ADMIN_API_KEY: ${GRAPHRAG_SECRETS__ADMIN_API_KEY}
       # base.yaml's stores.*/observability.* leaves already use container hostnames — these
       # exist to override config/local.yaml back to them, since APP_ENV=local (set in .env) also
       # pulls in local.yaml's HOST-facing localhost overrides (see local.yaml's comment). env
@@ -146,6 +168,7 @@ services:
       GRAPHRAG_STORES__QDRANT__URL: http://qdrant:6333
       GRAPHRAG_STORES__NEO4J__URI: bolt://neo4j:7687
       GRAPHRAG_STORES__REDIS__URL: redis://redis:6379/0
+      GRAPHRAG_LLM__GATEWAY_BASE_URL: http://litellm:4000/v1
     volumes:
       - ./data/uploads:/app/data/uploads
     depends_on:
@@ -178,15 +201,22 @@ services:
       dockerfile: Dockerfile
     profiles: [core]
     command: ["arq", "graphrag.apps.worker.settings.WorkerSettings"]
-    env_file:
-      - .env
     environment:
+      # See the `api` service's comment: explicit passthrough, not `env_file: .env` — this
+      # process must never see GEMINI_API_KEY/GROQ_API_KEY*/OPENROUTER_API_KEY.
+      APP_ENV: ${APP_ENV}
+      GRAPHRAG_SECRETS__POSTGRES_DSN: ${GRAPHRAG_SECRETS__POSTGRES_DSN}
+      GRAPHRAG_SECRETS__LITELLM_MASTER_KEY: ${GRAPHRAG_SECRETS__LITELLM_MASTER_KEY}
+      GRAPHRAG_SECRETS__LITELLM_VIRTUAL_KEY: ${GRAPHRAG_SECRETS__LITELLM_VIRTUAL_KEY}
+      GRAPHRAG_SECRETS__NEO4J_PASSWORD: ${GRAPHRAG_SECRETS__NEO4J_PASSWORD}
+      GRAPHRAG_SECRETS__ADMIN_API_KEY: ${GRAPHRAG_SECRETS__ADMIN_API_KEY}
       GRAPHRAG_OBSERVABILITY__OTLP_ENDPOINT: http://otel-collector:4317
       GRAPHRAG_OBSERVABILITY__TRAIL__LOKI_URL: http://otel-lgtm:3100
       GRAPHRAG_OBSERVABILITY__TRAIL__TEMPO_URL: http://otel-lgtm:3200
       GRAPHRAG_STORES__QDRANT__URL: http://qdrant:6333
       GRAPHRAG_STORES__NEO4J__URI: bolt://neo4j:7687
       GRAPHRAG_STORES__REDIS__URL: redis://redis:6379/0
+      GRAPHRAG_LLM__GATEWAY_BASE_URL: http://litellm:4000/v1
     volumes:
       - ./data/uploads:/app/data/uploads
     depends_on:
@@ -217,15 +247,22 @@ services:
       dockerfile: Dockerfile
     profiles: [core]
     command: ["arq", "graphrag.apps.worker.settings.ProjectionWorkerSettings"]
-    env_file:
-      - .env
     environment:
+      # See the `api` service's comment: explicit passthrough, not `env_file: .env` — this
+      # process must never see GEMINI_API_KEY/GROQ_API_KEY*/OPENROUTER_API_KEY.
+      APP_ENV: ${APP_ENV}
+      GRAPHRAG_SECRETS__POSTGRES_DSN: ${GRAPHRAG_SECRETS__POSTGRES_DSN}
+      GRAPHRAG_SECRETS__LITELLM_MASTER_KEY: ${GRAPHRAG_SECRETS__LITELLM_MASTER_KEY}
+      GRAPHRAG_SECRETS__LITELLM_VIRTUAL_KEY: ${GRAPHRAG_SECRETS__LITELLM_VIRTUAL_KEY}
+      GRAPHRAG_SECRETS__NEO4J_PASSWORD: ${GRAPHRAG_SECRETS__NEO4J_PASSWORD}
+      GRAPHRAG_SECRETS__ADMIN_API_KEY: ${GRAPHRAG_SECRETS__ADMIN_API_KEY}
       GRAPHRAG_OBSERVABILITY__OTLP_ENDPOINT: http://otel-collector:4317
       GRAPHRAG_OBSERVABILITY__TRAIL__LOKI_URL: http://otel-lgtm:3100
       GRAPHRAG_OBSERVABILITY__TRAIL__TEMPO_URL: http://otel-lgtm:3200
       GRAPHRAG_STORES__QDRANT__URL: http://qdrant:6333
       GRAPHRAG_STORES__NEO4J__URI: bolt://neo4j:7687
       GRAPHRAG_STORES__REDIS__URL: redis://redis:6379/0
+      GRAPHRAG_LLM__GATEWAY_BASE_URL: http://litellm:4000/v1
     depends_on:
       postgres:
         condition: service_healthy

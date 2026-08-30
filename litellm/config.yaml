@@ -1,10 +1,66 @@
-# BO-00 stub. BO-06 replaces this with the real model_list, fallbacks and rpm/tpm caps.
-# Exists only so the container has a file to mount and can reach healthy.
+# BO-06 — real model_list, key rotation, fallback chains, rpm/tpm caps, OTel callback.
+# Replaces the BO-00 stub. Aliases below match `llm.roles[*].model` in config.example.yaml.
+#
+# Provider spread (MANUAL M-3: Groq, Google AI Studio, OpenRouter free):
+#   fast-low-latency  (router, grader) -> Groq, 2 keys for rotation (test_key_rotation_spreads_load)
+#   bulk-high-tpm     (bulk)           -> Gemini flash-lite (huge free-tier TPM/context)
+#   synth-quality     (synth)          -> Gemini pro (final answer quality)
+#   judge-alt-vendor  (judge)          -> OpenRouter free (different vendor than synth-quality's
+#                                         Google, to avoid LLM-as-judge self-preference bias)
+#
+# rpm/tpm below are nominal seeds for LiteLLM's own weighted routing only — per MANUAL M-3,
+# provider free-tier limits are not trustworthy from any doc; the app-side adaptive_rate_limit
+# (config.example.yaml `llm.adaptive_rate_limit`) reads real limits off response headers instead.
 model_list:
-  - model_name: placeholder
+  - model_name: fast-low-latency
     litellm_params:
-      model: openai/gpt-3.5-turbo
-      api_key: sk-placeholder-not-used
+      model: groq/openai/gpt-oss-20b
+      api_key: os.environ/GROQ_API_KEY
+      rpm: 30
+      tpm: 8000
+  - model_name: fast-low-latency
+    litellm_params:
+      model: groq/openai/gpt-oss-20b
+      api_key: os.environ/GROQ_API_KEY_2
+      rpm: 30
+      tpm: 8000
+
+  - model_name: bulk-high-tpm
+    litellm_params:
+      model: gemini/gemini-2.5-flash-lite
+      api_key: os.environ/GEMINI_API_KEY
+      rpm: 15
+      tpm: 1000000
+
+  - model_name: synth-quality
+    litellm_params:
+      model: gemini/gemini-2.5-pro
+      api_key: os.environ/GEMINI_API_KEY
+      rpm: 5
+      tpm: 250000
+
+  - model_name: judge-alt-vendor
+    litellm_params:
+      model: openrouter/z-ai/glm-5.2:free
+      api_key: os.environ/OPENROUTER_API_KEY
+      rpm: 20
+      tpm: 40000
+
+litellm_settings:
+  num_retries: 2
+  # Cross-provider fallback chains: each alias's fallback lives on a DIFFERENT provider than its
+  # primary, so a single provider outage can't take down every role at once.
+  fallbacks:
+    - fast-low-latency: [judge-alt-vendor]
+    - bulk-high-tpm: [fast-low-latency]
+    - synth-quality: [judge-alt-vendor]
+    - judge-alt-vendor: [fast-low-latency]
+  callbacks: ["otel"]
+
+router_settings:
+  routing_strategy: simple-shuffle
+  enable_weighted_failover: true
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL

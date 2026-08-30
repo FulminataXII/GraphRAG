@@ -12,15 +12,19 @@ raise here, before a Qdrant collection of the wrong size gets created), and call
 `vector_store.ensure_collections()`. A Qdrant failure at startup is therefore no longer
 survivable the way BO-03 described it: this BO's `VectorStore` is real and required.
 
-`readyz` still needs Neo4j and the LiteLLM gateway reachable before their owning BOs land real
-adapters (ARCHITECTURE §2.1's health contract). Building `GraphStore`/`LLMClient` early to
-satisfy that would be building ahead of the current BO (BO-06/08 own `ensure_schema`/
-`structured()` and all the business logic around them). Instead, `readyz`'s probes for those two
-use the underlying client libraries directly — `verify_connectivity()`/an HTTP ping — which only
-need "is this reachable", not the ports' business methods. Qdrant now has both: a real
-`vector_store` (used for actual traffic) AND a separate probe-only client for `readyz`, kept
-distinct so a slow/degraded Qdrant shows up in `readyz` without being routed through the same
-client object real requests use.
+`readyz` still needs Neo4j reachable before BO-08 lands its real adapter (ARCHITECTURE §2.1's
+health contract). Building `GraphStore` early to satisfy that would be building ahead of the
+current BO (BO-08 owns `ensure_schema()` and the business logic around it). Instead, `readyz`'s
+Neo4j probe uses the driver directly — `verify_connectivity()` — which only needs "is this
+reachable", not the port's business methods. Qdrant has both: a real `vector_store` (used for
+actual traffic) AND a separate probe-only client for `readyz`, kept distinct so a slow/degraded
+Qdrant shows up in `readyz` without being routed through the same client object real requests
+use.
+
+As of BO-06, `llm_client` is real (`LiteLLMClient`, wrapping an `AsyncOpenAI` pointed at the
+LiteLLM gateway's OpenAI-compatible endpoint, authenticated with ONLY
+`secrets.litellm_virtual_key` — see BLUEPRINT §5.6). Its `readyz` probe calls `llm_client.health()`
+directly rather than a bespoke HTTP ping, since the real port method now exists.
 """
 
 from __future__ import annotations
@@ -31,22 +35,24 @@ from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
-import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from openai import AsyncOpenAI
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from graphrag.adapters.arq_queue import ArqJobQueue
 from graphrag.adapters.fastembed_embedder import FastEmbedEmbedder
+from graphrag.adapters.litellm_client import LiteLLMClient
 from graphrag.adapters.postgres.ledger import PostgresDocumentLedger
 from graphrag.adapters.postgres.sources import PostgresSourceRegistry
 from graphrag.adapters.qdrant_store import QdrantVectorStore
 from graphrag.adapters.redis_cache import RedisCache
 from graphrag.adapters.telemetry.logging import configure_logging
+from graphrag.adapters.telemetry.metrics import Metrics
 from graphrag.adapters.telemetry.middleware import AccessLogMiddleware, CorrelationIdMiddleware
-from graphrag.adapters.telemetry.otel import init_telemetry, shutdown_telemetry
+from graphrag.adapters.telemetry.otel import init_telemetry, meter, shutdown_telemetry
 from graphrag.apps.api.errors import install_exception_handlers
 from graphrag.config.settings import Settings, get_settings
 from graphrag.core.errors import ConflictError
@@ -224,8 +230,18 @@ class Container:
             )
             closers.append(("neo4j_probe", neo4j_driver.close))
 
-            http_probe_client = httpx.AsyncClient(timeout=settings.stores.qdrant.timeout_s)
-            closers.append(("http_probe", http_probe_client.aclose))
+            # Sole credential this process holds for the gateway — see BLUEPRINT §5.6. Provider
+            # keys live only in the LiteLLM proxy's own container environment, never here.
+            # max_retries=0: LiteLLM (num_retries, fallbacks in litellm/config.yaml) owns provider
+            # retries; the SDK's own retry layer must not also retry underneath LiteLLMClient's
+            # own repair loop, or "max_repairs + 1 calls, never more" would not hold.
+            openai_client = AsyncOpenAI(
+                base_url=settings.llm.gateway_base_url,
+                api_key=settings.secrets.litellm_virtual_key.get_secret_value(),
+                timeout=settings.llm.request_timeout_s,
+                max_retries=0,
+            )
+            closers.append(("litellm", openai_client.close))
 
             # Postgres and Redis are the two backends BO-03 depends on (ledger, sources, cache,
             # job queue); Qdrant joins them in BO-04 (vector_store, embedder) — verify all of
@@ -244,6 +260,16 @@ class Container:
 
             vector_store = QdrantVectorStore(qdrant_client, settings)
             await vector_store.ensure_collections()
+
+            metrics = Metrics(meter())
+            llm_client = LiteLLMClient(
+                openai_client,
+                llm=settings.llm,
+                metrics=metrics,
+                record_prompts=settings.observability.traces.record_prompts,
+                max_recorded_prompt_chars=settings.observability.traces.max_recorded_prompt_chars,
+                rate_limit_headers=tuple(settings.llm.adaptive_rate_limit.read_headers),
+            )
         except Exception:
             for _name, closer in reversed(closers):
                 try:
@@ -255,9 +281,6 @@ class Container:
         ledger = PostgresDocumentLedger(pg_engine)
         sources = PostgresSourceRegistry(pg_engine)
         job_queue = ArqJobQueue(arq_pool)
-
-        litellm_base = settings.llm.gateway_base_url.rsplit("/v1", 1)[0]
-        litellm_health_url = f"{litellm_base}/health/liveliness"
 
         async def _probe_postgres() -> bool:
             async with pg_engine.connect() as conn:
@@ -276,9 +299,7 @@ class Container:
             return True
 
         async def _probe_litellm() -> bool:
-            response = await http_probe_client.get(litellm_health_url)
-            response.raise_for_status()
-            return True
+            return await llm_client.health()
 
         prober = ReadyzProber(
             {
@@ -301,6 +322,7 @@ class Container:
             readyz_prober=prober,
             vector_store=vector_store,
             embedder=embedder,
+            llm_client=llm_client,
             closers=closers,
         )
 

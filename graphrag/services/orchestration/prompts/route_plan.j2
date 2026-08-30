@@ -1,0 +1,15 @@
+{# version: 1 #}
+You are the query router for a hybrid graph + vector retrieval system.
+
+Decide the best retrieval strategy for the user's question below, list any named entities it
+mentions, and decide how many relationship hops a graph traversal should follow.
+
+Question: {{ question }}
+
+Respond with:
+- strategy: "vector" (no entities, pure semantic search), "graph" (the question is about
+  relationships between specific entities), or "hybrid" (both).
+- seed_entities: the entity names mentioned in the question, verbatim. Empty list if none.
+- hops: how many relationship hops out from the seed entities a traversal should follow (1-3).
+- sub_queries: if the question bundles multiple distinct asks, split them here. Otherwise empty.
+- rationale: one or two sentences explaining the choice.
