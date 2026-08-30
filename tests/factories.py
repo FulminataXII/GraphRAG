@@ -10,6 +10,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+
+from graphrag.adapters.telemetry.metrics import Metrics
 from graphrag.core.ids import chunk_id, content_hash
 from graphrag.core.models import Chunk, SourceRef
 
@@ -31,6 +35,14 @@ def make_source_ref(
         char_end=char_end,
         ingested_at=ingested_at or datetime(2024, 1, 1, tzinfo=UTC),
     )
+
+
+def make_metrics() -> tuple[Metrics, InMemoryMetricReader]:
+    """A real `Metrics` backed by an in-memory reader — no mocks, and any test that cares can
+    inspect emitted values via the returned reader (see `graphrag.adapters.telemetry.metrics`)."""
+    reader = InMemoryMetricReader()
+    provider = MeterProvider(metric_readers=[reader])
+    return Metrics(provider.get_meter("test")), reader
 
 
 def make_chunk(text: str = "default chunk text", sources: list[SourceRef] | None = None) -> Chunk:

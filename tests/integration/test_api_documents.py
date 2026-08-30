@@ -21,6 +21,7 @@ from graphrag.apps.api.errors import install_exception_handlers
 from graphrag.apps.api.main import Container, ReadyzProber
 from graphrag.apps.api.routers import documents
 from graphrag.config.settings import Settings
+from tests.factories import make_metrics
 from tests.fakes import FakeCache, FakeDocumentLedger, FakeSourceRegistry
 from tests.unit._settings_helpers import set_required_secrets
 
@@ -51,6 +52,7 @@ def container(settings: Settings, arq_pool: ArqRedis) -> Container:
         cache=FakeCache(),
         job_queue=ArqJobQueue(arq_pool),
         readyz_prober=ReadyzProber({}, cache_s=5, timeout_s=1),
+        metrics=make_metrics()[0],
     )
 
 

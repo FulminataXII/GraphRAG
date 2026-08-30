@@ -159,6 +159,7 @@ class Container:
         cache: Cache,
         job_queue: JobQueuePort,
         readyz_prober: ReadyzProber,
+        metrics: Metrics,
         vector_store: VectorStorePort | None = None,
         graph_store: GraphStorePort | None = None,
         embedder: Embedder | None = None,
@@ -174,6 +175,7 @@ class Container:
         self.graph_store = graph_store
         self.embedder = embedder
         self.llm_client = llm_client
+        self.metrics = metrics
         self._readyz_prober = readyz_prober
         self._closers = closers or []
 
@@ -320,6 +322,7 @@ class Container:
             cache=cache,
             job_queue=job_queue,
             readyz_prober=prober,
+            metrics=metrics,
             vector_store=vector_store,
             embedder=embedder,
             llm_client=llm_client,

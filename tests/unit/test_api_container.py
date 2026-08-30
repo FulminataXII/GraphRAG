@@ -13,6 +13,7 @@ import pytest
 
 from graphrag.apps.api.main import Container, ReadyzProber, _assert_embedding_dimensions
 from graphrag.core.errors import ConflictError
+from tests.factories import make_metrics
 from tests.fakes import (
     FakeCache,
     FakeDocumentLedger,
@@ -102,6 +103,7 @@ async def test_lifespan_closes_pools_in_reverse() -> None:
         cache=FakeCache(),
         job_queue=FakeJobQueue(),
         readyz_prober=ReadyzProber({}, cache_s=5, timeout_s=1),
+        metrics=make_metrics()[0],
         closers=closers,
     )
 
@@ -127,6 +129,7 @@ async def test_aclose_continues_past_a_failing_closer() -> None:
         cache=FakeCache(),
         job_queue=FakeJobQueue(),
         readyz_prober=ReadyzProber({}, cache_s=5, timeout_s=1),
+        metrics=make_metrics()[0],
         closers=closers,
     )
 

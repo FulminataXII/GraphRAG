@@ -51,6 +51,7 @@ async def ingest_document(ctx: dict[str, Any], env: JobEnvelope[IngestDocumentPa
             ledger=container.ledger,
             job_queue=container.job_queue,
             clock=SystemClock(),
+            metrics=container.metrics,
             ingestion=container.settings.ingestion,
         )
         raw = _read_uri(env.payload.uri)

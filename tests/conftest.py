@@ -11,12 +11,15 @@ import os
 
 import pytest
 from opentelemetry import trace
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from graphrag.adapters.telemetry.metrics import Metrics
 from graphrag.apps.api.main import Container, ReadyzProber
 from graphrag.config.settings import Settings
+from tests.factories import make_metrics
 from tests.fakes import (
     FakeCache,
     FakeDocumentLedger,
@@ -64,7 +67,22 @@ def settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
 
 
 @pytest.fixture
-def container(settings: Settings) -> Container:
+def _metrics_pair() -> tuple[Metrics, InMemoryMetricReader]:
+    return make_metrics()
+
+
+@pytest.fixture
+def metrics(_metrics_pair: tuple[Metrics, InMemoryMetricReader]) -> Metrics:
+    return _metrics_pair[0]
+
+
+@pytest.fixture
+def metrics_reader(_metrics_pair: tuple[Metrics, InMemoryMetricReader]) -> InMemoryMetricReader:
+    return _metrics_pair[1]
+
+
+@pytest.fixture
+def container(settings: Settings, metrics: Metrics) -> Container:
     """All-fakes `Container` — every port backed by an in-memory `tests.fakes` implementation.
 
     Bypasses `Container.create()` (which builds real Postgres/Redis/arq/Qdrant/Neo4j clients)
@@ -78,6 +96,7 @@ def container(settings: Settings) -> Container:
         cache=FakeCache(),
         job_queue=FakeJobQueue(),
         readyz_prober=empty_prober,
+        metrics=metrics,
         vector_store=FakeVectorStore(),
         graph_store=FakeGraphStore(),
         embedder=FakeEmbedder(),
