@@ -46,6 +46,16 @@ model_list:
       rpm: 20
       tpm: 40000
 
+  # Test-only alias (tests/integration/test_litellm_client.py::test_gateway_fallback). The
+  # primary deployment's api_base is a port nothing listens on, so it is deliberately and always
+  # unreachable — the test proves fallback behavior via config, not by mutating live proxy state
+  # through the admin API.
+  - model_name: test-fallback-chain
+    litellm_params:
+      model: groq/openai/gpt-oss-20b
+      api_key: os.environ/GROQ_API_KEY_1
+      api_base: http://127.0.0.1:9
+
 litellm_settings:
   num_retries: 2
   # Cross-provider fallback chains: each alias's fallback lives on a DIFFERENT provider than its
@@ -55,6 +65,7 @@ litellm_settings:
     - bulk-high-tpm: [fast-low-latency]
     - synth-quality: [judge-alt-vendor]
     - judge-alt-vendor: [fast-low-latency]
+    - test-fallback-chain: [fast-low-latency]
   callbacks: ["otel"]
 
 router_settings:

@@ -112,6 +112,8 @@ class LiteLLMClient:
         conversation = list(messages)
         started = time.perf_counter()
         completed_repairs = 0
+        total_prompt_tokens = 0
+        total_completion_tokens = 0
 
         with tracer().start_as_current_span("LiteLLMClient.structured") as span:
             span.set_attribute("llm.role", role)
@@ -154,6 +156,14 @@ class LiteLLMClient:
                             details={"role": role, "alias": alias},
                         ) from exc
 
+                    # BLUEPRINT §3.2: prompt_tokens/completion_tokens are the sum across every
+                    # upstream call this structured() invocation makes, including rejected
+                    # repair attempts — a provider bills for a malformed response exactly as
+                    # for a good one, so counting only the final attempt understates spend.
+                    usage = response.usage
+                    total_prompt_tokens += usage.prompt_tokens if usage else 0
+                    total_completion_tokens += usage.completion_tokens if usage else 0
+
                     raw_content = response.choices[0].message.content or ""
                     try:
                         parsed = json.loads(raw_content)
@@ -176,30 +186,27 @@ class LiteLLMClient:
                         completed_repairs += 1
                         continue
 
-                    usage = response.usage
-                    prompt_tokens = usage.prompt_tokens if usage else 0
-                    completion_tokens = usage.completion_tokens if usage else 0
                     latency_ms = int((time.perf_counter() - started) * 1000)
 
                     span.set_attribute("llm.model_served", response.model)
                     span.set_attribute("llm.repair_attempts", completed_repairs)
-                    span.set_attribute("llm.prompt_tokens", prompt_tokens)
-                    span.set_attribute("llm.completion_tokens", completion_tokens)
+                    span.set_attribute("llm.prompt_tokens", total_prompt_tokens)
+                    span.set_attribute("llm.completion_tokens", total_completion_tokens)
 
                     self._metrics.repair_attempts.record(completed_repairs, {"llm_role": role})
                     self._metrics.llm_tokens.add(
-                        prompt_tokens, {"llm_role": role, "direction": "prompt"}
+                        total_prompt_tokens, {"llm_role": role, "direction": "prompt"}
                     )
                     self._metrics.llm_tokens.add(
-                        completion_tokens, {"llm_role": role, "direction": "completion"}
+                        total_completion_tokens, {"llm_role": role, "direction": "completion"}
                     )
 
                     return StructuredResult(
                         value=value,
                         model_served=response.model,
                         repair_attempts=completed_repairs,
-                        prompt_tokens=prompt_tokens,
-                        completion_tokens=completion_tokens,
+                        prompt_tokens=total_prompt_tokens,
+                        completion_tokens=total_completion_tokens,
                         latency_ms=latency_ms,
                     )
             except Exception as exc:

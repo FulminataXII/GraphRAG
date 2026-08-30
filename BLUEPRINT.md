@@ -500,12 +500,23 @@ class StructuredResult[T](BaseModel):
 
     Defined HERE, in core, not beside the LiteLLM adapter — core/ports.py references it, and
     core may not import adapters. The adapter constructs it; the port declares it.
+
+    ⚠️ prompt_tokens and completion_tokens are the SUM ACROSS ALL `repair_attempts + 1`
+    upstream calls, never the final attempt alone. These fields exist for cost accounting,
+    and a provider bills for a rejected malformed response exactly as for a good one —
+    final-attempt-only semantics understate spend by precisely the amount a misbehaving
+    prompt is costing, which is the opposite of what the number is for. It also keeps
+    app-side totals and gateway-side spend rows measuring the same population, which is
+    what `test_cost_tracked` compares. The adapter must accumulate usage on every loop
+    iteration, before the parse branch — extracting it only on success silently drops
+    every repaired attempt. Same total flows to the OTel span attributes and the
+    llm_tokens metric.
     """
     value: T
     model_served: str
     repair_attempts: int
-    prompt_tokens: int
-    completion_tokens: int
+    prompt_tokens: int      # summed across all attempts — see above
+    completion_tokens: int  # summed across all attempts — see above
     latency_ms: int
 
 class SourceRef(BaseModel):
@@ -762,6 +773,19 @@ class DocumentLedger(Protocol):
     # status=DELETING and its ledger row is retained. The row is the audit trail — it records
     # that this sha256 was ingested and later removed, which is what stops a re-upload from
     # looking like a first-time ingest. Storage cost is one row per document.
+
+class MetricsPort(Protocol):
+    """Structural type for the Metrics instrument holder.
+
+    Exists so `services/` can take `metrics: MetricsPort` instead of `metrics: Any`. `Any`
+    disables mypy at that boundary — which is exactly how a missing required `metrics=` argument
+    at a worker call site reached runtime as a TypeError, invisible to both lint and the unit
+    suite. Declare each instrument as a read-only property returning a protocol with
+    `add`/`record`, so a typo in an instrument name fails type-checking rather than at 3am.
+
+    The concrete `Metrics` class lives in adapters/telemetry/metrics.py and satisfies this
+    structurally — no inheritance, no import from services into adapters.
+    """
 
 class UploadStorage(Protocol):
     """Moves uploaded bytes from the API process to the worker process.
@@ -1257,12 +1281,29 @@ class RedisCache:
 ```python
 # StructuredResult is defined in core/models.py (§3.2) — this adapter constructs it.
 
+> ⚠️ **`max_tokens` this small can conflict with `response_format`, and the failure looks like
+> provider exhaustion.** A structured-output request with `max_tokens: 1` cannot possibly emit
+> valid JSON, and at least one provider (Groq, confirmed live) hard-rejects it with
+> `400 json_validate_failed` rather than truncating. If every deployment in a fallback chain uses
+> the same schema-constrained call, they all fail the same way and the distinct error types
+> (`LLMSchemaViolation` vs `LLMProviderExhausted`) collapse into one. For a test that only needs
+> to prove a request landed somewhere — not that structured output worked — call the gateway
+> directly and assert on LiteLLM's own `x-litellm-model-group` / `x-litellm-attempted-fallbacks`
+> response headers instead of going through `structured()`.
+
 class LiteLLMClient:
     """Implements LLMClient. The ONLY component that talks to the gateway.
 
     Contract:
         - Holds exactly one credential: secrets.litellm_virtual_key. Provider keys must NOT
           be present in this process's environment.
+          ⚠️ This is a COMPOSE requirement, not just an application one. `api`, `worker` and
+          `projection-worker` must NOT use `env_file: .env` — that injects every variable in the
+          file, including GEMINI_API_KEY / GROQ_API_KEY* / OPENROUTER_API_KEY, into processes
+          that must never see them. Pass `GRAPHRAG_SECRETS__*` explicitly instead. Only the
+          `litellm` service receives provider keys. The failure is silent: everything works, the
+          gateway is simply no longer the sole key holder, and the isolation the design claims is
+          gone.
         - structured() resolves role -> alias via llm.roles[role].model, then:
             1. Call with response_format json_schema when supported, else json_object.
             2. Parse into `schema`. On pydantic ValidationError, re-prompt appending the
@@ -1274,6 +1315,12 @@ class LiteLLMClient:
         - On 429: reads Retry-After and the x-ratelimit-* headers named in
           llm.adaptive_rate_limit.read_headers, records llm_rate_limited, and raises
           RateLimited with retry_after in details. Static RPM values are never trusted.
+        - Accumulates usage across EVERY attempt of the repair loop, not just the one that
+          parsed. Extract response.usage immediately after each upstream call, before the
+          parse branch, and add into running totals. StructuredResult.prompt_tokens /
+          completion_tokens carry those totals — see §3.2. A repaired call that reports only
+          the final attempt undercounts real spend and makes gateway-side spend rows
+          irreconcilable with app-side counters.
         - Emits a span with llm.role, llm.alias, llm.model_served, llm.repair_attempts,
           llm.prompt_tokens, llm.completion_tokens.
         - Records prompts on the span only when observability.traces.record_prompts is true,
@@ -1748,13 +1795,17 @@ class Container:
     Fields, and the BO that first populates each. Every field exists from BO-03 onward; the ones
     not yet built are None, so a later BO wires rather than redefines:
 
-        settings, clock, id_generator                    BO-03 (SystemClock lands BO-05)
+        settings, clock, id_generator, metrics           BO-03 (SystemClock lands BO-05)
         ledger, sources, cache, job_queue, readyz_prober  BO-03
         embedder, vector_store                            BO-04
         upload_storage                                    BO-05
         llm_client                                        BO-06
         graph_store                                       BO-08
         retrievers, orchestrator                          BO-09 / BO-10
+
+    `metrics` is REQUIRED, not optional. create() builds one `Metrics(meter())` and passes that
+    single instance to every consumer — one instrument set per process. Constructing a second
+    inside a task or service double-registers the instruments.
 
     The all-fakes unit `container` fixture (§9) constructs this directly rather than calling
     create(), which is what keeps it a unit fixture.
@@ -1918,8 +1969,39 @@ def routing_accuracy(pred: Sequence[str], gold: Sequence[str]) -> tuple[float, C
 
 # metrics/generation.py
 class GenerationJudge:
-    """RAGAS + Phoenix wrappers. Contract: uses llm.roles['judge'], whose provider is
-    validated at startup to differ from llm.roles['synth'] (self-preference bias)."""
+    """RAGAS + Phoenix wrappers.
+
+    Contract:
+        - Uses llm.roles['judge'], whose provider is validated at startup to differ from
+          llm.roles['synth'] (self-preference bias).
+        - Judge temperature 0. A non-deterministic judge makes every eval delta unreadable.
+
+    RAGAS — use the CURRENT class names, not the old snake_case metric objects:
+        Faithfulness                          answer grounded in retrieved_contexts
+        ResponseRelevancy                     (was answer_relevancy)
+        LLMContextPrecisionWithoutReference    reference-free precision
+        NonLLMContextRecall                    recall against gold contexts, NO LLM call
+        LLMContextRecall                       recall when only a reference ANSWER exists
+
+    Data shape is `SingleTurnSample` (user_input, response, retrieved_contexts, reference)
+    collected into an `EvaluationDataset`, scored by `evaluate(dataset, metrics)`.
+
+    ⚠️ The legacy per-metric pattern (`Faithfulness().single_turn_ascore(sample)`) is deprecated
+    in RAGAS 0.4 and removed in 1.0. Pin the RAGAS version explicitly and use the collections
+    API; a `>=` pin will break this module on a minor bump.
+
+    **Prefer NonLLMContextRecall.** The golden set carries `gold_chunk_ids`, so context recall is
+    computable deterministically — no judge call, no free-tier quota, no run-to-run variance.
+    Reserve LLM-judged metrics for faithfulness and relevancy, which genuinely need a judge.
+    That choice is most of the difference between an eval run that costs 50 LLM calls and one
+    that costs 500.
+
+    Phoenix — the built-in evaluator catalog is stable: `HallucinationEvaluator`, `QAEvaluator`,
+    `RelevanceEvaluator`, run over a spans DataFrame via `run_evals`, or `llm_classify` with a
+    custom template plus a `rails` label list. Run RelevanceEvaluator over retrieved context and
+    QAEvaluator over the final answer: that two-stage split tells you whether a failure is in the
+    retriever or the generator, which is the diagnostic question that matters.
+    """
 
 # runner.py
 class EvalRunner:

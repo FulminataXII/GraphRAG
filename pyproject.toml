@@ -134,5 +134,6 @@ markers = [
     "integration: requires the docker-compose stack (make up)",
     "contract: API/schema contract checks",
     "eval: requires live LLM provider keys, excluded from default runs",
+    "llm_quota: quota-consuming tests excluded from the default run",
 ]
 addopts = "-m 'not integration and not eval'"

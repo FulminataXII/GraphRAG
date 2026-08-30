@@ -102,10 +102,11 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/litellm
       # Provider keys — ONLY this container ever sees them (BO-06). api/worker hold only
       # secrets.litellm_virtual_key; see .env.example's header comment.
-      GROQ_API_KEY: ${GROQ_API_KEY}
+      GROQ_API_KEY_1: ${GROQ_API_KEY_1}
       GROQ_API_KEY_2: ${GROQ_API_KEY_2}
-      GEMINI_API_KEY: ${GEMINI_API_KEY}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      GEMINI_API_KEY_1: ${GEMINI_API_KEY_1}
+      GEMINI_API_KEY_2: ${GEMINI_API_KEY_2}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY_1}
       # OTel callback (litellm/config.yaml's `litellm_settings.callbacks: ["otel"]`) reads these
       # standard OTel env vars directly — this is a third-party binary, not our app, so it does
       # NOT go through graphrag/adapters/telemetry/otel.py or a GRAPHRAG_-prefixed setting.

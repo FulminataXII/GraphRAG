@@ -691,6 +691,16 @@ actually exists in your account.
 | `synth` | gemini-flash → groq-70b → openrouter-free | quality-critical |
 | `judge` | **must differ from `synth`** | LLM-as-judge exhibits self-preference bias; grading your own output inflates scores. Config enforces `judge.provider != synth.provider` at startup. |
 
+> ⚠️ **`rpm`/`tpm` are per DEPLOYMENT; provider limits are usually per ACCOUNT.**
+> Two Groq deployments each declaring `tpm: 8000` make the router budget 16000 — but Groq enforces
+> 8000 per *organisation*, so it forwards traffic it believes is within budget and Groq returns 429.
+> **Divide the account limit across the deployments that share it**: two Groq entries get
+> `tpm: 4000` each, summing to the real ceiling. Same for `rpm`.
+>
+> Rotation still buys what it's for — load spreading, and surviving one key being revoked. What it
+> does not buy is headroom. Extra capacity comes only from a *different provider* under the same
+> alias.
+
 **Key rotation:** list the same model twice in `model_list` with different `api_key` values and let
 the router spread load across them. That is genuine rotation, not a mock.
 

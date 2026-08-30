@@ -1,4 +1,4 @@
-.PHONY: up down test test-int test-all lint eval trail migrate
+.PHONY: up down test test-int test-all test-llm lint eval trail migrate
 
 # Docker Compose only auto-loads docker-compose.yml — docker-compose.obs.yml must be named
 # explicitly with -f, or `--profile obs` selects a profile that no loaded file declares and
@@ -21,13 +21,20 @@ down:
 test:
 	uv run pytest -m "not integration and not eval"
 
-# Integration tests — requires `make up` first.
+# Integration tests — requires `make up` first. Excludes llm_quota (real provider calls on a
+# free tier with an 8000 TPM ceiling — see `test-llm`); left in here they drain the day's budget
+# and later stages fail for reasons unrelated to their own code (BUILD_ORDER BO-06).
 test-int:
-	uv run pytest -m integration
+	uv run pytest -m "integration and not llm_quota"
 
-# Everything except eval (eval needs live LLM provider keys).
+# Everything except eval and llm_quota (eval needs live LLM provider keys; llm_quota burns them).
 test-all:
-	uv run pytest -m "not eval"
+	uv run pytest -m "not eval and not llm_quota"
+
+# Quota-consuming integration tests only — run deliberately, not as part of test-int/test-all.
+# A 429 here is a quota result, not a defect.
+test-llm:
+	uv run pytest -m llm_quota
 
 lint:
 	uv run ruff check .

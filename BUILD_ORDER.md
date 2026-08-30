@@ -51,6 +51,7 @@ Legend: `[C]` component · `[T]` test · `[G]` gate (must pass to proceed)
 - `[T]` `test_config_hash_stable_and_secret_free` — stable across processes; changing a secret doesn't change it
 - `[T]` `test_validate_cli_exit_codes` — 0 on valid, 1 + error tree on invalid
 - `[T]` `test_layering_script_catches_violation` — planted bad import fails the script
+- `[T][G]` `test_compose_vars_are_all_defined` — every `${VAR}` interpolated in any compose file is defined in `.env.example`. Compose substitutes an unset variable with an **empty string** and continues: no error, no warning beyond one line at startup, just a service booting with blank config. This is how LiteLLM can run with no master key for six build stages before anyone notices
 - `[T]` `test_no_crlf_in_repo` — no tracked file contains `\r\n`. Guards against a Windows checkout silently breaking container entrypoints
 - `[T][G]` `[integration]` `test_stack_healthy` — every service declared in the active profiles reaches `healthy` within 120s. Assert against what compose declares, never a hardcoded count (core=5, obs=3). **Must call `docker compose ps --all`**: without `--all`, a container that crashed and exited is absent from the output entirely, so the check passes on the survivors while the stack is broken. **You must run this yourself: `make up && make test-int`.** It is the only BO-00 gate that proves the stack actually starts
 - `[T]` `test_isolation_fixture_skips_integration` — the autouse cwd/env isolation fixture returns early for tests marked `integration`. Without this it chdirs away from the repo root and every `docker compose` call fails with a confusing non-zero exit
@@ -128,7 +129,7 @@ Legend: `[C]` component · `[T]` test · `[G]` gate (must pass to proceed)
 - `[T]` `test_trail_survives_backend_outage` — one backend down → renders partial, lists failure, doesn't raise
 - `[T]` `test_telemetry_init_never_raises` — bad endpoint → degrades to no-op
 - `[T]` `test_otel_logs_imports_confined_to_one_module` — static scan: `opentelemetry.sdk._logs` is imported only by `telemetry/logging.py`, so an upstream break is a one-file fix
-- `[T]` `test_every_declared_metric_has_an_emitter` — static scan: each instrument on `Metrics` is referenced at exactly one site outside `metrics.py`. Catches dead dashboard panels and double-counting
+- `[T]` `test_every_declared_metric_has_an_emitter` — each instrument on `Metrics` has **at least one emission call site** (`metrics.<name>.add(` / `.record(`), and none is dead. Match call sites via AST or a precise regex — **not** raw text occurrences of the instrument name, which also match same-named model fields and span attributes (`StructuredResult.repair_attempts`, `llm.repair_attempts`) and produce false failures
 
 ---
 
@@ -162,6 +163,8 @@ Legend: `[C]` component · `[T]` test · `[G]` gate (must pass to proceed)
 - `[T]` `test_error_envelope_shape` — code, message, correlation_id, trace_id, retryable
 - `[T][G]` `test_500_leaks_no_traceback`
 - `[T]` `test_container_requires_request_in_dependency` — a `Depends` without `Request` fails
+- `[T][G]` `test_worker_tasks_construct_real_services` — at least one unit test per worker task reaches the REAL service construction rather than short-circuiting on a fake container. `mypy` only checks `core/services/config`, so a missing required argument in `apps/` is caught by neither lint nor a mocked test — it surfaces as a `TypeError` on the first production job
+- `[T]` `test_services_take_typed_metrics_not_any` — services annotate `metrics: MetricsPort`, never `Any`. `Any` disables type-checking at exactly the boundary where wiring errors happen
 - `[T][G]` `[integration]` `test_tables_isolated_in_graphrag_schema` — every graphrag table, and Alembic's version table, exist in schema `graphrag`; `public` contains none of them. Guards against colliding with Phoenix's `api_keys` or an `alembic upgrade` touching another tool's tables
 - `[T]` `[integration]` `test_readyz_probes_are_raw_client_pings` — `readyz` reaches Qdrant/Neo4j/LiteLLM via raw client calls private to `Container`, not via `VectorStore`/`GraphStore`/`LLMClient`. Those ports are BO-04/06/08; readiness only needs reachability
 - `[T]` `test_lifespan_closes_pools_in_reverse`
@@ -259,7 +262,7 @@ Legend: `[C]` component · `[T]` test · `[G]` gate (must pass to proceed)
 *Requires provider API keys (MANUAL M-3).*
 
 **Build:**
-1. `[C]` `litellm/config.yaml` — **replaces the BO-00 stub**. 5 aliases matching `llm.roles[*].model`, duplicate entries per alias with different `api_key` for rotation, `rpm`/`tpm` per deployment, `num_retries`, `fallbacks`, `routing_strategy: simple-shuffle`, `enable_weighted_failover`, OTel callback. Spend tracking needs `DATABASE_URL` on the litellm service — point it at the same Postgres but let LiteLLM own its tables in `public`; graphrag's live in the `graphrag` schema (BO-03), so they cannot collide. Switch the healthcheck from `/health/liveliness` to `/health/readiness` only once real keys are present
+1. `[C]` `litellm/config.yaml` — **replaces the BO-00 stub**. One `model_name` alias per DISTINCT value in `llm.roles[*].model` — that is **4 aliases, not 5 roles**: `router` and `grader` both map to `fast-low-latency`, so an alias can serve several roles. Duplicate entries under one alias give key rotation; `rpm`/`tpm` per deployment (**divided across deployments sharing one account limit** — see ARCHITECTURE §4.3); `num_retries`; cross-provider `fallbacks`; `routing_strategy: simple-shuffle`; `enable_weighted_failover`; OTel callback. Spend tracking needs `DATABASE_URL` pointing at LiteLLM's **own `litellm` database** (BO-05 gave each tool its own, so each can be reset independently). Keep the healthcheck on `/health/liveliness` — `/health/readiness` probes every provider and turns a rate-limited free tier into a red stack
 2. `[C]` `adapters/litellm_client.py` — `LiteLLMClient`, `StructuredResult`
 3. `[C]` `services/orchestration/schemas.py`
 4. `[C]` `services/orchestration/prompts.py` + the six `prompts/*.j2` templates named in BLUEPRINT §6.4
@@ -271,6 +274,7 @@ Legend: `[C]` component · `[T]` test · `[G]` gate (must pass to proceed)
 - `[T][G]` `test_structured_raises_after_max_repairs` — exactly `max_repairs + 1` calls, never more
 - `[T]` `test_repair_prompt_includes_validation_error`
 - `[T][G]` `test_no_provider_key_in_app_env` — no `GEMINI_API_KEY` / `GROQ_API_KEY` in the app process
+- `[T][G]` `test_compose_app_services_do_not_use_env_file` — `api`, `worker`, `projection-worker` pass `GRAPHRAG_SECRETS__*` explicitly and never `env_file: .env`, which would inject every provider key into processes that must not hold one. Only `litellm` gets provider keys
 - `[T]` `test_429_reads_retry_after` — `RateLimited` carries `retry_after`
 - `[T]` `test_429_increments_rate_limited_metric`
 - `[T]` `test_client_does_not_retry_provider_errors` — no double-retry on top of LiteLLM
@@ -279,10 +283,17 @@ Legend: `[C]` component · `[T]` test · `[G]` gate (must pass to proceed)
 - `[T]` `test_all_six_templates_exist_and_are_versioned` — each has a `{# version: N #}` first line
 - `[T][G]` `test_out_schemas_use_str_ids_not_uuid` — `CitationOut.chunk_id`, `RelevanceGrade.chunk_id` are `str`. A UUID type turns a hallucinated id into a parse failure that burns repair attempts, when it should be caught deterministically by `verify_citations`
 - `[T]` `test_answer_out_requires_at_least_one_citation` — `min_length=1`
-- `[T]` `test_litellm_aliases_match_config_roles` — every `llm.roles[*].model` resolves to a `model_name` in `litellm/config.yaml`. A typo'd alias fails at first call, deep in a node, not at startup
-- `[T]` `[integration]` `test_gateway_fallback` — kill primary → succeeds, log names the served model
-- `[T]` `[integration]` `test_key_rotation_spreads_load` — 50 calls hit both `model_id`s
-- `[T]` `[integration]` `test_cost_tracked` — spend report within 10% of app-side token counters
+- `[T][G]` `test_litellm_aliases_match_config_roles` — every distinct `llm.roles[*].model` resolves to a `model_name` in `litellm/config.yaml`, and every alias there is referenced by at least one role. Aliases and roles are **not** one-to-one: several roles may share an alias. A typo'd alias otherwise fails at first call, deep inside a node, rather than at startup
+- `[T]` `test_deployment_limits_sum_to_account_limit` — where several deployments share one provider account, their `rpm`/`tpm` sum to that account's limit, not each carrying the full value. Two Groq keys at `tpm: 8000` each make the router budget 16000 against a real 8000 ceiling, so it forwards traffic it thinks is in budget and gets 429
+- `[T]` `[integration]` `[llm_quota]` `test_gateway_fallback` — kill primary → succeeds, log names the served model
+- `[T]` `[integration]` `[llm_quota]` `test_key_rotation_spreads_load` — enough calls to hit both `model_id`s, with `max_tokens: 1`. Keep the count as low as still proves spreading; each call is real quota
+- `[T]` `[integration]` `[llm_quota]` `test_cost_tracked` — spend report within 10% of app-side token counters
+
+> **Mark quota-consuming tests `llm_quota` and exclude them from the default `make test-int`.**
+> These three make real provider calls on a free tier with an 8000 TPM ceiling. Left in the default
+> run they drain the day's budget, and later build stages then fail for reasons unrelated to their
+> own code. Add `make test-llm` to run them deliberately, and note in the README that a 429 there
+> is a quota result, not a defect.
 
 ---
 
@@ -404,7 +415,7 @@ Legend: `[C]` component · `[T]` test · `[G]` gate (must pass to proceed)
 1. `[C]` `evaluation/golden/*.yaml` loader + `GoldenItem`
 2. `[C]` `evaluation/metrics/retrieval.py`
 3. `[C]` `evaluation/metrics/routing.py`
-4. `[C]` `evaluation/metrics/generation.py` — `GenerationJudge`
+4. `[C]` `evaluation/metrics/generation.py` — `GenerationJudge`. Use current RAGAS names (`Faithfulness`, `ResponseRelevancy`, `LLMContextPrecisionWithoutReference`, `NonLLMContextRecall`) with `SingleTurnSample`/`EvaluationDataset`/`evaluate()`. **Pin the RAGAS version with `==`** — the legacy per-metric API is deprecated in 0.4 and removed in 1.0
 5. `[C]` `evaluation/runner.py`, `evaluation/report.py`
 6. `[C]` `adapters/postgres/evals.py` — `PostgresEvalStore`
 7. `[C]` `apps/cli` — add the `eval` command
@@ -418,6 +429,9 @@ Legend: `[C]` component · `[T]` test · `[G]` gate (must pass to proceed)
 - `[T][G]` `test_eval_disables_cache` — 0 cache hits during a run
 - `[T][G]` `test_judge_provider_differs_from_synth` — asserted at eval time, not just startup
 - `[T]` `test_eval_run_persisted_with_git_sha_and_config_hash`
+- `[T][G]` `test_context_recall_uses_no_llm` — recall is computed by `NonLLMContextRecall` against `gold_chunk_ids`, making zero judge calls. The golden set already has ground truth; paying an LLM to rediscover it burns free-tier quota and adds run-to-run variance to a number that should be exact
+- `[T]` `test_ragas_pinned_exactly` — `pyproject.toml` pins ragas with `==`, not `>=`. The metric API changes across minor versions
+- `[T]` `test_judge_temperature_is_zero` — a non-deterministic judge makes every eval delta unreadable
 - `[T][G]` `[eval]` `test_refusal_on_unanswerable` — ≥4/5 refuse
 - `[T]` `[eval]` `test_routing_accuracy_above_threshold`
 - `[T]` `[eval]` `test_smoke_subset_gate` — 10-item subset clears thresholds; below → exit 1
@@ -434,6 +448,7 @@ Legend: `[C]` component · `[T]` test · `[G]` gate (must pass to proceed)
 5. `[C]` `apps/api/routers/debug.py` — trail endpoint, admin-gated, prod-disabled
 6. `[C]` `docker-compose.prod.yml`, Caddy, non-root, read-only rootfs, digest-pinned images
 7. `[C]` `.github/workflows/ci.yml`
+7b. `[C]` Widen `mypy --strict` to cover `apps/` as well as `core/services/config`. `apps/` holds the wiring, and a missing required constructor argument there is caught by neither lint nor a mocked unit test — it surfaces as a `TypeError` on the first production job (see the `metrics=` incident in BO-06)
 8. `[C]` Grafana dashboard JSON
 9. `[C]` `README.md`
 

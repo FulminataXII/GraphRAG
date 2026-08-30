@@ -161,6 +161,10 @@ llm:
     bulk: { model: bulk-high-tpm, temperature: 0.1, max_tokens: 2000 }
     synth: { model: synth-quality, temperature: 0.2, max_tokens: 1200 }
     judge: { model: judge-alt-vendor, temperature: 0.0, max_tokens: 500 }
+    # Test-only role (tests/integration/test_litellm_client.py::test_gateway_fallback), resolves
+    # to litellm/config.yaml's test-fallback-chain alias. max_tokens: 1 to minimize quota spend —
+    # the test proves fallback via LiteLLMClient's failure mode, not by parsing a full response.
+    test_fallback_chain: { model: test-fallback-chain, temperature: 0.0, max_tokens: 1 }
   batching:
     bulk_chunks_per_request: 20
     grader_docs_per_request: 8

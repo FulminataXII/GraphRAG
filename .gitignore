@@ -15,3 +15,4 @@ reports/
 corpus/
 .DS_Store
 data/uploads/
+.claude/

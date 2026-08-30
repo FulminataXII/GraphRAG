@@ -160,7 +160,10 @@ async def test_structured_valid_first_try(settings: Settings) -> None:
 
 
 async def test_structured_repairs_then_succeeds(settings: Settings) -> None:
-    fake = _FakeAsyncOpenAI(_completion("not json"), _completion(_VALID_ROUTE_PLAN_JSON))
+    fake = _FakeAsyncOpenAI(
+        _completion("not json", prompt_tokens=10, completion_tokens=5),
+        _completion(_VALID_ROUTE_PLAN_JSON, prompt_tokens=20, completion_tokens=8),
+    )
     client = _client(fake, settings.llm)
 
     result = await client.structured(
@@ -172,6 +175,10 @@ async def test_structured_repairs_then_succeeds(settings: Settings) -> None:
 
     assert len(fake.completions.calls) == 2
     assert result.repair_attempts == 1
+    # BLUEPRINT §3.2: prompt_tokens/completion_tokens sum EVERY upstream call, including the
+    # rejected repair attempt — a provider bills for a malformed response like any other.
+    assert result.prompt_tokens == 10 + 20
+    assert result.completion_tokens == 5 + 8
 
 
 async def test_structured_raises_after_max_repairs(settings: Settings) -> None:

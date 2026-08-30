@@ -34,7 +34,9 @@ in the **Ubuntu (WSL2) terminal** — see M-0. Give it exactly this:
 > are applied upstream and synced back.
 >
 > **Work in this checkout.** Do not create a git worktree or a new branch. Commit nothing and
-> tag nothing — leave changes in the working tree for me to review and commit.
+> tag nothing — leave changes in the working tree for me to review and commit. (If you are a
+> background session and the harness forces isolation, say so immediately rather than working
+> around it — I'll decide whether to restart you in the foreground.)
 >
 > **Changing enforcement infrastructure** — `scripts/check_layering.py`, the `Makefile` lint
 > target, ruff/mypy config in `pyproject.toml`, or fixtures in `tests/conftest.py` — requires
@@ -126,6 +128,30 @@ Two more you'll want:
 git log --oneline -5              # recent history
 git diff bo-03 -- scripts/ Makefile pyproject.toml tests/conftest.py
 ```
+
+### Run sessions in the foreground
+
+**This is the root cause of every "the code vanished into a worktree" incident.**
+
+Claude Code can run two ways:
+
+| Mode | How you start it | Can it write to your checkout? |
+|---|---|---|
+| **Foreground** | Open a terminal in the repo, run `claude`, paste the prompt | **Yes** — edits land directly |
+| **Background** | Delegated or detached job (async task, mobile hand-off) | **No** — the harness sandboxes it and forces a worktree |
+
+A background session literally cannot edit your working tree; it refuses with *"This background
+session hasn't isolated its changes yet. Call EnterWorktree first."* That is a harness guard, not
+the agent ignoring you — telling it "don't use a worktree" cannot help, because it has no other
+way to write anything.
+
+**So: run every build order in the foreground.** Terminal, in the repo directory, `claude`. Then
+the "no worktree" line in the standing prompt is actually followable, and you skip the merge
+entirely.
+
+If you're already in a background session and the task is small, just let it use the worktree and
+merge afterwards — that's cheaper than restarting. Don't let it edit `.claude/settings.json` to
+disable the guard.
 
 ### Worktrees — why your code can vanish
 
@@ -492,6 +518,120 @@ Create free accounts and put keys in `.env`:
 **Create two keys per provider where allowed** — key rotation is a feature you're claiming, and
 `test_key_rotation_spreads_load` needs a second key to be real.
 
+#### Which model names? Ask the provider, not the agent
+
+**Claude Code cannot reliably name models.** Model IDs churn constantly and look memorable, so it
+will produce a plausible one from stale training data — the same failure that gave us
+`litellm:v1.98.0-stable`, an image tag that never existed. It can web-search, but that returns
+blog posts. The provider's own API is authoritative and takes one command each. **You run these**;
+they need your keys.
+
+```bash
+source .env
+
+# Groq
+curl -s https://api.groq.com/openai/v1/models \
+  -H "Authorization: Bearer $GROQ_API_KEY_1" | jq -r '.data[].id' | sort
+
+# Gemini
+curl -s "https://generativelanguage.googleapis.com/v1beta/models?key=$GEMINI_API_KEY_1" \
+  | jq -r '.models[] | select(.supportedGenerationMethods[]? == "generateContent") | .name' | sort
+
+# OpenRouter — free variants only
+curl -s https://openrouter.ai/api/v1/models \
+  | jq -r '.data[] | select(.id | endswith(":free")) | .id' | sort
+```
+
+Paste the output into the BO-06 prompt so the agent chooses from a verified list. It writes
+`litellm/config.yaml` with LiteLLM's provider prefixes: `groq/…`, `gemini/…`, `openrouter/…`.
+
+**What each alias is selecting for** — the choice is about rate-limit shape, not benchmark scores:
+
+| Alias | Used by | Pick |
+|---|---|---|
+| `fast-low-latency` | router, grader | Smallest fast model. Many tiny calls, latency-sensitive — Groq's strength |
+| `bulk-high-tpm` | entity extraction | Highest token throughput, latency-tolerant. A Gemini Flash-Lite tier |
+| `synth-quality` | answer generation | Best quality you can afford on a free tier. A Gemini Flash tier |
+| `judge-alt-vendor` | groundedness, evals | **Must be a different provider from `synth`** — enforced at startup. Self-preference bias inflates every score otherwise |
+
+Gemini names come back as `models/gemini-…`; strip the `models/` prefix and write
+`gemini/gemini-…` in the config.
+
+#### Adding a key — the two-file process
+
+Keys live in exactly two places, and adding one always touches both. Nothing else in the codebase
+changes: the app knows only role names (`synth`, `judge`, …), never a provider or a key.
+
+**1. `.env`** — add a numbered variable. The name is yours to choose; only `litellm/config.yaml`
+reads it:
+
+```bash
+GROQ_API_KEY_1=gsk_...
+GROQ_API_KEY_2=gsk_...
+GEMINI_API_KEY_1=AIza...
+GEMINI_API_KEY_2=AIza...        # a second key on the same provider
+OPENROUTER_API_KEY_1=sk-or-...
+```
+
+**2. `litellm/config.yaml`** — add a `model_list` entry. **The `model_name` is what makes it a
+rotation**: two entries sharing one `model_name` become two deployments of the same alias, and
+the router spreads load across them.
+
+```yaml
+model_list:
+  # Two keys, one alias -> rotation. The router picks between them per request.
+  - model_name: fast-low-latency
+    litellm_params:
+      model: groq/llama-3.3-70b-versatile
+      api_key: os.environ/GROQ_API_KEY_1
+      rpm: 30
+  - model_name: fast-low-latency          # SAME alias
+    litellm_params:
+      model: groq/llama-3.3-70b-versatile
+      api_key: os.environ/GROQ_API_KEY_2
+      rpm: 30
+
+  # A different provider under the same alias -> cross-provider failover
+  - model_name: fast-low-latency
+    litellm_params:
+      model: gemini/gemini-flash-lite-latest
+      api_key: os.environ/GEMINI_API_KEY_1
+```
+
+Then restart only the gateway — no rebuild, since the file is bind-mounted:
+
+```bash
+docker compose restart litellm
+docker compose logs --tail 30 litellm     # confirm it loaded the new deployments
+```
+
+**Three things worth knowing:**
+
+- **`os.environ/VAR` is LiteLLM's own syntax**, not shell expansion. LiteLLM reads the variable at
+  startup. Putting the literal key in the YAML works and is a mistake — that file is committed.
+- **Rate limits are usually per account, not per key.** Groq's are per organisation, so a second
+  Groq key spreads load without raising your ceiling. Real headroom comes from a *different
+  provider* under the same alias. Two keys still buy you the rotation mechanism and survival of
+  one key being revoked.
+- **`rpm`/`tpm` are per deployment.** Set them to what that key actually has. The router uses them
+  to route away from a deployment near its limit, so wrong numbers make it route badly.
+
+**Removing a key:** delete the `model_list` entry first, then the `.env` variable, then restart.
+The other order leaves LiteLLM referencing a variable that no longer exists, and it fails at
+startup rather than at first use — which is better, but confusing if you weren't expecting it.
+
+**Verify a rotation is live:**
+```bash
+for i in $(seq 1 20); do
+  curl -s http://localhost:4000/v1/chat/completions \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" -H 'Content-Type: application/json' \
+    -d '{"model":"fast-low-latency","messages":[{"role":"user","content":"hi"}],"max_tokens":1}' \
+    | python3 -c "import sys,json; print(json.load(sys.stdin).get('model','?'))"
+done | sort | uniq -c
+```
+More than one distinct line means the router is spreading. One line means both deployments
+collapsed into one — usually a `model_name` mismatch or a missing env var.
+
 Then:
 ```bash
 # In the Ubuntu shell. Searches only tracked files, so .env (gitignored) is correctly skipped.
@@ -704,6 +844,31 @@ than any feature in the repo.
 
 ---
 
+## Known issue — the worker can wedge and stay wedged
+
+Seen once during BO-06: `test_stack_healthy` failed because the `worker` container had been
+unhealthy for **42 minutes**. Cause was a stale `delete_document` job raising `ConflictError:
+cannot set status on unknown document`, which broke the worker's health-check sentinel. The
+process never recovered on its own.
+
+```bash
+docker compose restart worker      # healthy again in ~15s
+```
+
+Two things to take from it. The restart is the workaround, not a fix — the underlying
+ingestion/ledger behaviour (a job referencing a document the ledger no longer knows about) is
+untouched, and it will recur. And a worker that sits dead for 42 minutes while you're working is
+exactly the silent-blind-spot shape this project keeps getting bitten by: nothing shouted, the
+failure only surfaced because an unrelated test happened to check.
+
+**If an integration test fails for no reason you can connect to your change, check container
+health before you debug the test.** `docker compose ps --all` — with `--all`, or crashed
+containers don't appear at all.
+
+Revisit properly at BO-12 (hardening) if it happens more than once.
+
+---
+
 ## When Something Goes Wrong
 
 **1. Get the correlation ID.** Every error response carries one. It also appears on the
@@ -839,6 +1004,7 @@ LF. Reserve pasted heredocs for cases where you'll check with `file` afterwards.
 | `docker: command not found` inside Ubuntu | Docker Desktop → Settings → Resources → **WSL Integration** → enable Ubuntu |
 | `&&` throws a parser error | PowerShell 5.1 doesn't support it. Use the Ubuntu shell (M-0) |
 | Tests take minutes instead of seconds | Repo is under `/mnt/c/`. `pwd` should start `/home/`. See M-0 step 4 |
+| `docker compose restart <svc>` fails with a stale bind-mount error (WSL2) | Known flaky corner of Docker Desktop's WSL2 backend, not a config bug. Use `docker compose rm -f <svc> && docker compose up -d <svc>` instead — same effect, more reliable |
 | `bad interpreter: /bin/bash^M` | CRLF line endings. `git config --global core.autocrlf input`, add `.gitattributes`, re-checkout |
 | `test_no_crlf_in_repo` fails on a file you pasted | Windows clipboard carried `\r\n` into the heredoc. `sed -i 's/\r$//' <path>`. See the CRLF section above |
 | Ports bound but nothing responds | Docker publishes to the Windows host; from Ubuntu use `localhost`, which WSL2 forwards. If it fails, check `localhostForwarding=true` in `.wslconfig` |
