@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from graphrag.core.events import (
@@ -116,6 +116,11 @@ class IngestionService:
         ledger: DocumentLedger,
         job_queue: JobQueue,
         clock: Clock,
+        # `Metrics` (adapters.telemetry.metrics) has no `core.ports` Protocol — services/ may
+        # not import adapters/ (layering), so this is typed `Any` rather than the concrete
+        # class. Still DI, not a global: the caller wires the same `Metrics` instance used
+        # everywhere else.
+        metrics: Any,
         ingestion: IngestionSection,
     ) -> None:
         self._parser = parser
@@ -126,6 +131,7 @@ class IngestionService:
         self._ledger = ledger
         self._job_queue = job_queue
         self._clock = clock
+        self._metrics = metrics
         self._ingestion = ingestion
 
     async def _advance(self, doc_id: str, target: DocumentStatus, current_idx: int) -> int:
@@ -185,6 +191,7 @@ class IngestionService:
         existing = await self._vector_store.get_chunks(all_chunk_ids)
         existing_ids = {chunk.chunk_id for chunk in existing}
         new_ids = [cid for cid in all_chunk_ids if cid not in existing_ids]
+        self._metrics.ingest_chunks_deduped.add(len(existing_ids))
 
         if new_ids:
             new_chunks = [chunks_by_id[cid] for cid in new_ids]

@@ -16,12 +16,15 @@ import uuid
 from collections.abc import AsyncIterator
 
 import pytest
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from qdrant_client import AsyncQdrantClient
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from graphrag.adapters.postgres.ledger import PostgresDocumentLedger
 from graphrag.adapters.postgres.sources import PostgresSourceRegistry
 from graphrag.adapters.qdrant_store import QdrantVectorStore
+from graphrag.adapters.telemetry.metrics import Metrics
 from graphrag.config.settings import Settings
 from graphrag.core.ids import chunk_id
 from graphrag.core.models import DocumentStatus
@@ -105,12 +108,24 @@ def job_queue() -> FakeJobQueue:
 
 
 @pytest.fixture
+def metrics_reader() -> InMemoryMetricReader:
+    return InMemoryMetricReader()
+
+
+@pytest.fixture
+def metrics(metrics_reader: InMemoryMetricReader) -> Metrics:
+    provider = MeterProvider(metric_readers=[metrics_reader])
+    return Metrics(provider.get_meter("test"))
+
+
+@pytest.fixture
 def ingestion_service(
     vector_store: QdrantVectorStore,
     graph_store: FakeGraphStore,
     sources: PostgresSourceRegistry,
     ledger: PostgresDocumentLedger,
     job_queue: FakeJobQueue,
+    metrics: Metrics,
     ingestion_settings: Settings,
 ) -> IngestionService:
     return IngestionService(
@@ -122,8 +137,24 @@ def ingestion_service(
         ledger=ledger,
         job_queue=job_queue,
         clock=FakeClock(),
+        metrics=metrics,
         ingestion=ingestion_settings.ingestion,
     )
+
+
+def _counter_total(reader: InMemoryMetricReader, metric_name: str) -> float:
+    data = reader.get_metrics_data()
+    if data is None:
+        return 0.0
+    total = 0.0
+    for resource_metrics in data.resource_metrics:
+        for scope_metrics in resource_metrics.scope_metrics:
+            for metric in scope_metrics.metrics:
+                if metric.name != metric_name:
+                    continue
+                for point in metric.data.data_points:
+                    total += point.value
+    return total
 
 
 async def _register_and_ingest(
@@ -156,6 +187,23 @@ async def test_shared_paragraph_two_sources(
 
     all_sources = await sources.sources_for([expected_id])
     assert {ref.doc_id for ref in all_sources[expected_id]} == {"doc-a", "doc-b"}
+
+
+async def test_shared_paragraph_emits_chunks_deduped_metric(
+    ingestion_service: IngestionService,
+    ledger: PostgresDocumentLedger,
+    metrics_reader: InMemoryMetricReader,
+) -> None:
+    """doc-b's chunk already exists (from doc-a) -> `ingest_chunks_deduped` counts it once."""
+    await _register_and_ingest(
+        ingestion_service, ledger, "doc-a", "file:///a.txt", _SHARED_PARAGRAPH
+    )
+    assert _counter_total(metrics_reader, "graphrag.ingest.chunks.deduped") == 0
+
+    await _register_and_ingest(
+        ingestion_service, ledger, "doc-b", "file:///b.txt", _SHARED_PARAGRAPH
+    )
+    assert _counter_total(metrics_reader, "graphrag.ingest.chunks.deduped") == 1
 
 
 async def test_reingest_same_doc_idempotent(
