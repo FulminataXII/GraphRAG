@@ -15,7 +15,7 @@ model_list:
   - model_name: fast-low-latency
     litellm_params:
       model: groq/openai/gpt-oss-20b
-      api_key: os.environ/GROQ_API_KEY
+      api_key: os.environ/GROQ_API_KEY_1
       rpm: 30
       tpm: 8000
   - model_name: fast-low-latency
@@ -28,21 +28,21 @@ model_list:
   - model_name: bulk-high-tpm
     litellm_params:
       model: gemini/gemini-2.5-flash-lite
-      api_key: os.environ/GEMINI_API_KEY
+      api_key: os.environ/GEMINI_API_KEY_1
       rpm: 15
       tpm: 1000000
 
   - model_name: synth-quality
     litellm_params:
       model: gemini/gemini-2.5-pro
-      api_key: os.environ/GEMINI_API_KEY
+      api_key: os.environ/GEMINI_API_KEY_2
       rpm: 5
       tpm: 250000
 
   - model_name: judge-alt-vendor
     litellm_params:
       model: openrouter/z-ai/glm-5.2:free
-      api_key: os.environ/OPENROUTER_API_KEY
+      api_key: os.environ/OPENROUTER_API_KEY_1
       rpm: 20
       tpm: 40000
 
