@@ -100,9 +100,10 @@ class IngestionService:
         - It NEVER writes Qdrant's sources[] directly. That is ProjectionService's job.
 
     `graph_store` is `GraphStore | None` (not the bare `GraphStore` the constructor-dependency
-    list names): `Neo4jGraphStore` doesn't exist until BO-08, and `Container` (BO-03/04) already
-    established the pattern of leaving ports None until their owning BO lands a real adapter.
-    Steps 5's graph write is skipped whenever `graph_store is None`.
+    list names): as of BO-08, `Container.create()` always supplies a real `Neo4jGraphStore`, but
+    the type stays Optional here since a caller (a unit test, or any future all-fakes fixture)
+    may still legitimately construct this service without one. Step 5's graph write is skipped
+    whenever `graph_store is None`.
     """
 
     def __init__(

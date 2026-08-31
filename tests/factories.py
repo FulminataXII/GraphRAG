@@ -9,13 +9,14 @@ here alongside that BO.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from uuid import UUID, uuid4
 
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
 from graphrag.adapters.telemetry.metrics import Metrics
-from graphrag.core.ids import chunk_id, content_hash
-from graphrag.core.models import Chunk, SourceRef
+from graphrag.core.ids import chunk_id, content_hash, entity_id
+from graphrag.core.models import Chunk, Entity, EntityType, Relation, SourceRef
 
 
 def make_source_ref(
@@ -52,4 +53,43 @@ def make_chunk(text: str = "default chunk text", sources: list[SourceRef] | None
         content_hash=content_hash(text),
         sources=sources if sources is not None else [make_source_ref()],
         entity_ids=[],
+    )
+
+
+def make_entity(
+    *,
+    name: str = "Acme",
+    type: EntityType = EntityType.ORG,
+    aliases: list[str] | None = None,
+    mention_count: int = 1,
+    canonical_id: UUID | None = None,
+) -> Entity:
+    return Entity(
+        canonical_id=canonical_id or entity_id(name, type.value),
+        name=name,
+        name_normalized=name.lower(),
+        type=type,
+        aliases=aliases if aliases is not None else [],
+        mention_count=mention_count,
+    )
+
+
+def make_relation(
+    *,
+    src_id: UUID | None = None,
+    dst_id: UUID | None = None,
+    type: str = "RELATED_TO",
+    confidence: float = 0.9,
+    chunk_id: UUID | None = None,
+    doc_id: str = "doc-1",
+    evidence_span: str = "evidence sentence",
+) -> Relation:
+    return Relation(
+        src_id=src_id if src_id is not None else uuid4(),
+        dst_id=dst_id if dst_id is not None else uuid4(),
+        type=type,
+        confidence=confidence,
+        chunk_id=chunk_id if chunk_id is not None else uuid4(),
+        doc_id=doc_id,
+        evidence_span=evidence_span,
     )

@@ -12,7 +12,9 @@ see that module for why) are validated the same way `verify_citations` validates
 `AnswerOut.citations[].chunk_id` (BLUEPRINT §6.4): a hallucinated id is a deterministic
 membership check against the batch's real chunk ids, not a parse failure that burns a repair
 attempt. A mention whose `char_start`/`char_end` falls outside its claimed chunk's text is
-dropped the same way — this is `test_extraction_spans_within_chunk`'s guarantee.
+dropped the same way — this is `test_extraction_spans_within_chunk`'s guarantee. A relation has
+no offsets to check (`RelationOut` carries no `char_start`/`char_end`), only the same chunk_id
+membership check.
 """
 
 from __future__ import annotations
@@ -23,10 +25,15 @@ from typing import TYPE_CHECKING, Any
 from graphrag.adapters.clock import SystemClock
 from graphrag.apps.worker.tasks._common import run_task
 from graphrag.core.errors import AppError
-from graphrag.core.events import ExtractEntitiesPayload, JobEnvelope, ResolveEntitiesPayload
+from graphrag.core.events import (
+    ExtractEntitiesPayload,
+    JobEnvelope,
+    ResolveEntitiesPayload,
+    UnresolvedRelation,
+)
 from graphrag.core.models import DocumentStatus, Mention
 from graphrag.services.orchestration.prompts import render
-from graphrag.services.orchestration.schemas import EntityExtraction, MentionOut
+from graphrag.services.orchestration.schemas import EntityExtraction, MentionOut, RelationOut
 
 if TYPE_CHECKING:
     from graphrag.core.models import Chunk
@@ -53,19 +60,36 @@ def _valid_mention(mention_out: MentionOut, chunks_by_id: dict[str, Chunk]) -> M
     )
 
 
+def _valid_relation(
+    relation_out: RelationOut, chunks_by_id: dict[str, Chunk]
+) -> UnresolvedRelation | None:
+    chunk = chunks_by_id.get(relation_out.chunk_id)
+    if chunk is None:
+        return None  # hallucinated chunk_id -- not one of the ids given in the prompt
+    return UnresolvedRelation(
+        chunk_id=chunk.chunk_id,
+        src_surface=relation_out.src_surface,
+        dst_surface=relation_out.dst_surface,
+        type=relation_out.type,
+        confidence=relation_out.confidence,
+        evidence_span=relation_out.evidence_span,
+    )
+
+
 async def extract_mentions(
     chunks: Sequence[Chunk],
     *,
     llm_client: LLMClient,
     batch_size: int,
     max_repairs: int,
-) -> list[Mention]:
-    """LLM-extracts entity mentions from `chunks`, batched at `batch_size` per call.
-
-    Relations are extracted too (schema-required) but not returned here: nothing in this BO can
-    persist them yet — see `ResolveEntitiesPayload`'s docstring.
+) -> tuple[list[Mention], list[UnresolvedRelation]]:
+    """LLM-extracts entity mentions AND relations from `chunks`, batched at `batch_size` per
+    call. Relations come back with surface-form endpoints, not canonical ids — see
+    `UnresolvedRelation` for why, and `resolve_entities` for where they get resolved and given a
+    sink.
     """
     mentions: list[Mention] = []
+    relations: list[UnresolvedRelation] = []
     for batch in _batched(chunks, batch_size):
         chunks_by_id = {str(chunk.chunk_id): chunk for chunk in batch}
         prompt = render(
@@ -83,7 +107,12 @@ async def extract_mentions(
             for mention_out in result.value.entities
             if (mention := _valid_mention(mention_out, chunks_by_id)) is not None
         )
-    return mentions
+        relations.extend(
+            relation
+            for relation_out in result.value.relations
+            if (relation := _valid_relation(relation_out, chunks_by_id)) is not None
+        )
+    return mentions, relations
 
 
 async def extract_entities(ctx: dict[str, Any], env: JobEnvelope[ExtractEntitiesPayload]) -> None:
@@ -98,7 +127,7 @@ async def extract_entities(ctx: dict[str, Any], env: JobEnvelope[ExtractEntities
 
     async def _body() -> None:
         chunks = await container.vector_store.get_chunks(env.payload.chunk_ids)
-        mentions = await extract_mentions(
+        mentions, relations = await extract_mentions(
             chunks,
             llm_client=container.llm_client,
             batch_size=container.settings.llm.batching.bulk_chunks_per_request,
@@ -116,7 +145,9 @@ async def extract_entities(ctx: dict[str, Any], env: JobEnvelope[ExtractEntities
                 correlation_id=env.correlation_id,
                 otel={},
                 enqueued_at=SystemClock().now(),
-                payload=ResolveEntitiesPayload(doc_id=env.payload.doc_id, mentions=mentions),
+                payload=ResolveEntitiesPayload(
+                    doc_id=env.payload.doc_id, mentions=mentions, relations=relations
+                ),
             ),
         )
 

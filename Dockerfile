@@ -24,6 +24,10 @@ RUN groupadd --system graphrag && useradd --system --gid graphrag --create-home 
 
 WORKDIR /app
 
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libmagic1 \
+ && rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/graphrag /app/graphrag
 COPY --from=builder /app/pyproject.toml /app/pyproject.toml

@@ -246,10 +246,11 @@ async def test_extraction_spans_within_chunk() -> None:
                 latency_ms=0,
             )
 
-    mentions = await extract_mentions(
+    mentions, relations = await extract_mentions(
         [chunk], llm_client=_ScriptedLLM(), batch_size=20, max_repairs=2
     )
 
+    assert relations == []
     assert len(mentions) == 1
     assert isinstance(mentions[0], Mention)
     assert mentions[0].char_start >= 0

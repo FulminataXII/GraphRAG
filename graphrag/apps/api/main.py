@@ -2,8 +2,7 @@
 
 BO-04 scope note: `Container` is the composition root for every port in `core.ports`. As of
 BO-04, `ledger`, `sources`, `cache`, `job_queue` (BO-03), `vector_store`, and `embedder` (BO-04)
-all have real adapters; `graph_store` and `llm_client` stay `None` until BO-06/08 land theirs —
-nothing in this BO calls them.
+all have real adapters.
 
 Per BLUEPRINT §7.1's Container contract, `create()` now also constructs `FastEmbedEmbedder` and
 `QdrantVectorStore`, asserts the embedder's real output width matches
@@ -12,19 +11,25 @@ raise here, before a Qdrant collection of the wrong size gets created), and call
 `vector_store.ensure_collections()`. A Qdrant failure at startup is therefore no longer
 survivable the way BO-03 described it: this BO's `VectorStore` is real and required.
 
-`readyz` still needs Neo4j reachable before BO-08 lands its real adapter (ARCHITECTURE §2.1's
-health contract). Building `GraphStore` early to satisfy that would be building ahead of the
-current BO (BO-08 owns `ensure_schema()` and the business logic around it). Instead, `readyz`'s
-Neo4j probe uses the driver directly — `verify_connectivity()` — which only needs "is this
-reachable", not the port's business methods. Qdrant has both: a real `vector_store` (used for
-actual traffic) AND a separate probe-only client for `readyz`, kept distinct so a slow/degraded
-Qdrant shows up in `readyz` without being routed through the same client object real requests
-use.
-
 As of BO-06, `llm_client` is real (`LiteLLMClient`, wrapping an `AsyncOpenAI` pointed at the
 LiteLLM gateway's OpenAI-compatible endpoint, authenticated with ONLY
 `secrets.litellm_virtual_key` — see BLUEPRINT §5.6). Its `readyz` probe calls `llm_client.health()`
 directly rather than a bespoke HTTP ping, since the real port method now exists.
+
+As of BO-08, `graph_store` is real too (`Neo4jGraphStore`, wrapping the same `AsyncDriver` used
+for the `readyz` probe — one driver per process is the documented Neo4j usage pattern, and the
+driver is a connection pool, not a single connection, so sharing it between the probe and the
+real adapter is safe). BLUEPRINT §7.1's Container contract is unqualified: "create(settings)
+constructs clients, calls ensure_collections/ensure_schema, and returns a ready container. Raises
+on any failure — the process must not start with a half-built container." That supersedes this
+module's earlier (BO-04-era) framing of Neo4j as perpetually probe-only/degraded-at-startup —
+the earlier docstring's own reasoning for deferring this was "BO-08 owns ensure_schema() and the
+business logic around it," which is exactly the BO landing now. `ensure_schema()` therefore runs
+eagerly, in the same fail-fast block as Postgres/Redis/Qdrant, and a broken Neo4j now prevents
+startup the same way a broken Qdrant already did. The `readyz` Neo4j probe (`verify_connectivity()`
+on the raw driver) is kept as-is even though `graph_store.health()` now exists: readiness asks
+"is this reachable", not "does the port work" (BLUEPRINT §7.1's `ReadyzProber` contract), and the
+raw-driver probe is unaffected by anything the business-logic port does with the same connection.
 """
 
 from __future__ import annotations
@@ -45,6 +50,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from graphrag.adapters.arq_queue import ArqJobQueue
 from graphrag.adapters.fastembed_embedder import FastEmbedEmbedder
 from graphrag.adapters.litellm_client import LiteLLMClient
+from graphrag.adapters.neo4j_store import Neo4jGraphStore
 from graphrag.adapters.postgres.ledger import PostgresDocumentLedger
 from graphrag.adapters.postgres.sources import PostgresSourceRegistry
 from graphrag.adapters.qdrant_store import QdrantVectorStore
@@ -139,12 +145,14 @@ class Container:
 
     Contract (BLUEPRINT §7.1):
         - create(settings) constructs clients, asserts the embedder's real dimensions, calls
-          vector_store.ensure_collections(), and returns a ready container. Raises on any
-          failure of a backend this BO actually depends on (Postgres, Redis, Qdrant) — the
-          process must not start with a half-built container. Neo4j/LiteLLM reachability is NOT
-          required at startup (see module docstring): they're probed lazily by readyz(), and
-          the whole point of readyz/degraded-mode is that the app starts and serves even when
-          one of them is down.
+          vector_store.ensure_collections() and graph_store.ensure_schema(), and returns a ready
+          container. Raises on any failure of a backend this BO actually depends on (Postgres,
+          Redis, Qdrant, Neo4j — as of BO-08) — the process must not start with a half-built
+          container. LiteLLM reachability is NOT required at startup (see module docstring): it
+          is probed lazily by readyz(), and `resilience.degradation.allow_vector_only`/
+          `allow_graph_only` (BLUEPRINT §2.2's cross-section validator) is a QUERY-TIME
+          degradation path for a backend that was reachable at startup and later drops — a
+          distinct concern from whether the process may start at all.
         - aclose() closes pools in reverse construction order.
         - The worker builds its own Container in arq's on_startup (BO-05). Same class, same
           settings.
@@ -230,7 +238,7 @@ class Container:
                 settings.stores.neo4j.uri,
                 auth=("neo4j", settings.secrets.neo4j_password.get_secret_value()),
             )
-            closers.append(("neo4j_probe", neo4j_driver.close))
+            closers.append(("neo4j", neo4j_driver.close))
 
             # Sole credential this process holds for the gateway — see BLUEPRINT §5.6. Provider
             # keys live only in the LiteLLM proxy's own container environment, never here.
@@ -246,9 +254,9 @@ class Container:
             closers.append(("litellm", openai_client.close))
 
             # Postgres and Redis are the two backends BO-03 depends on (ledger, sources, cache,
-            # job queue); Qdrant joins them in BO-04 (vector_store, embedder) — verify all of
-            # them eagerly so a broken container never reports itself as started. Neo4j/LiteLLM
-            # are still probe-only; see the module docstring for why.
+            # job queue); Qdrant joins them in BO-04 (vector_store, embedder), Neo4j in BO-08
+            # (graph_store) — verify all of them eagerly so a broken container never reports
+            # itself as started. LiteLLM is still probe-only; see the module docstring for why.
             async with pg_engine.connect() as conn:
                 await conn.execute(text("SELECT 1"))
             await redis_client.ping()
@@ -262,6 +270,9 @@ class Container:
 
             vector_store = QdrantVectorStore(qdrant_client, settings)
             await vector_store.ensure_collections()
+
+            graph_store = Neo4jGraphStore(neo4j_driver, settings)
+            await graph_store.ensure_schema()
 
             metrics = Metrics(meter())
             llm_client = LiteLLMClient(
@@ -324,6 +335,7 @@ class Container:
             readyz_prober=prober,
             metrics=metrics,
             vector_store=vector_store,
+            graph_store=graph_store,
             embedder=embedder,
             llm_client=llm_client,
             closers=closers,

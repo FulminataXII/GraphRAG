@@ -15,6 +15,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
+from neo4j import AsyncDriver, AsyncGraphDatabase
 from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
@@ -39,6 +40,12 @@ POSTGRES_DSN_LOCAL = (
     f"{_read_dotenv('POSTGRES_DB', 'graphrag')}"
 )
 REDIS_URL_LOCAL = "redis://localhost:6379/0"
+NEO4J_URI_LOCAL = "bolt://localhost:7687"
+# secrets have no YAML leaf to override (same reason POSTGRES_DSN_LOCAL reads .env directly
+# above) — REQUIRED_SECRET_ENV's fake "test-neo4j-password" is for unit tests that never open a
+# real connection; this reads the value docker-compose's `neo4j` service actually authenticates
+# with (`NEO4J_AUTH=neo4j/<this>` in .env).
+NEO4J_PASSWORD_LOCAL = _read_dotenv("GRAPHRAG_SECRETS__NEO4J_PASSWORD", "changeme")
 
 
 @pytest.fixture
@@ -73,6 +80,26 @@ async def redis_client() -> AsyncIterator[Redis]:
     yield client
     await client.flushdb()
     await client.aclose()
+
+
+@pytest.fixture
+async def neo4j_driver() -> AsyncIterator[AsyncDriver]:
+    driver = AsyncGraphDatabase.driver(NEO4J_URI_LOCAL, auth=("neo4j", NEO4J_PASSWORD_LOCAL))
+    yield driver
+    await driver.close()
+
+
+@pytest.fixture
+async def clean_neo4j(neo4j_driver: AsyncDriver) -> AsyncIterator[AsyncDriver]:
+    """Deletes every node (and their relationships) before AND after each test, so tests don't
+    leak graph state into each other regardless of run order — same convention as `clean_pg`."""
+
+    async def _wipe() -> None:
+        await neo4j_driver.execute_query("MATCH (n) DETACH DELETE n", database_="neo4j")
+
+    await _wipe()
+    yield neo4j_driver
+    await _wipe()
 
 
 @pytest.fixture

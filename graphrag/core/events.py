@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Final
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from graphrag.core.models import Mention
 
@@ -40,6 +40,35 @@ class ExtractEntitiesPayload(BaseModel):
     chunk_ids: list[UUID]
 
 
+class UnresolvedRelation(BaseModel):
+    """A relation the LLM extracted whose endpoints are still SURFACE FORMS, not canonical
+    entity ids — `Relation` (core/models.py) requires `src_id`/`dst_id: UUID`, which don't exist
+    until `ResolutionService.resolve()` has run, so a just-extracted relation cannot be a
+    `Relation` yet. This is `resolve_entities`' own job to finish: build a surface -> canonical_id
+    map from `ResolutionResult.entities` (name + aliases) and look each endpoint up in it.
+
+    SPEC GAP (BO-08): the natural shape for this is already declared — `RelationOut`
+    (services/orchestration/schemas.py, chunk_id/src_surface/dst_surface/type/confidence/
+    evidence_span) — but it lives in `services/`, and `core/` may not import `services/`
+    (BLUEPRINT §0's layering table; `scripts/check_layering.py` enforces it). BLUEPRINT §1a's
+    Type Index has no slot for an unresolved-relation carrier in `core/events.py` either. Neither
+    document anticipated that giving relations a sink (this BO's own build step 2, "Wire graph
+    writes into IngestionService / resolve task") requires something shaped like `RelationOut` to
+    survive a queue hop through a `core/` payload. This type is that: a layering-legal,
+    structurally identical twin of `RelationOut`, defined here rather than imported. Reported
+    rather than silently added.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    chunk_id: UUID
+    src_surface: str
+    dst_surface: str
+    type: str
+    confidence: float
+    evidence_span: str
+
+
 class ResolveEntitiesPayload(BaseModel):
     """Carries `extract_entities`' output to `resolve_entities`.
 
@@ -50,13 +79,16 @@ class ResolveEntitiesPayload(BaseModel):
     between them; BLUEPRINT wins on this disagreement per its own precedence rule, and the
     disagreement is reported here rather than silently picking a side). Something has to carry
     `extract_entities`' output across that queue hop; this reuses the already-Type-Indexed
-    `Mention` (core/models.py) rather than inventing a new domain concept. Relations are not
-    carried here: `GraphStore.upsert_relations` (the only sink for them) doesn't exist until
-    BO-08, so `resolve_entities` in this BO has nothing to do with them yet.
+    `Mention` (core/models.py) rather than inventing a new domain concept.
+
+    `relations` (BO-08 addition): `extract_entities` no longer discards the LLM's relation
+    output — see `UnresolvedRelation`. Defaults to `[]` so BO-07-era callers that never populated
+    it still construct validly.
     """
 
     doc_id: str
     mentions: list[Mention]
+    relations: list[UnresolvedRelation] = Field(default_factory=list)
 
 
 class ProjectPayloadPayload(BaseModel):
