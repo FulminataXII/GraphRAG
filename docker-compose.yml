@@ -194,7 +194,9 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-      start_period: 15s
+      # api calls ensure_schema() against Neo4j during Container.create(), so cold start
+      # waits on Neo4j accepting connections. Measured ~60s cold; 90s leaves real headroom.
+      start_period: 90s
 
   worker:
     build:
