@@ -70,7 +70,9 @@ class RoutePlanOut(BaseModel):
     )
     hops: int = Field(ge=1, le=3)
     relation_type: str | None = Field(
-        default=None, description="Only required for entities_by_relation template"
+        default=None,
+        description="Relation type to filter on for the entities_by_relation template; "
+        "unused by other templates",
     )
     sub_queries: list[str] = Field(default_factory=list, max_length=4)
     rationale: str = Field(max_length=400)

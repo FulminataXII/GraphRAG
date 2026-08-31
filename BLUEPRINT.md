@@ -549,6 +549,7 @@ class ScoredChunk(BaseModel):
 class Mention(BaseModel):
     surface: str; type: EntityType
     chunk_id: UUID; char_start: int; char_end: int; confidence: float
+    entity_id: UUID | None = None
 
 class Entity(BaseModel):
     canonical_id: UUID; name: str; name_normalized: str
