@@ -331,11 +331,13 @@ Legend: `[C]` component · `[T]` test · `[G]` gate (must pass to proceed)
 
 **Build:**
 1. `[C]` `adapters/neo4j_store.py` — `CYPHER_TEMPLATES`, `Neo4jGraphStore`
-2. `[C]` Wire graph writes into `IngestionService` / resolve task
+2. `[C]` Wire graph writes into `IngestionService` / resolve task — this is where BO-07's
+   orphaned outputs (relations, alias edges) finally get a sink. Both `ResolutionResult.aliases`
+   and the extracted relations must be persisted, not just entities.
 
 **Test:**
 - `[T]` `[integration]` `test_ensure_schema_idempotent`
-- `[T][G]` `[integration]` `test_every_relation_has_provenance` — `MATCH ()-[r:RELATES]->() WHERE r.chunk_id IS NULL RETURN count(r)` → 0
+- `[T][G]` `[integration]` `test_every_relation_has_provenance` — first assert `MATCH ()-[r:RELATES]->() RETURN count(r)` > 0, **then** `MATCH ()-[r:RELATES]->() WHERE r.chunk_id IS NULL RETURN count(r)` → 0. ⚠️ Without the non-empty precondition this gate passes on an empty database, which is exactly the state BO-07 leaves behind — it extracts relations with no sink.
 - `[T]` `test_upsert_relations_rejects_null_provenance` — raises before touching the DB
 - `[T][G]` `[integration]` `test_neo4j_stores_full_chunk_text` — no truncation; `Chunk.text` round-trips
 - `[T][G]` `test_no_fstring_cypher` — static scan: zero f-strings / `.format()` / concatenation in Cypher
@@ -343,7 +345,9 @@ Legend: `[C]` component · `[T]` test · `[G]` gate (must pass to proceed)
 - `[T]` `test_traverse_rejects_raw_cypher`
 - `[T][G]` `[integration]` `test_template_caps_degree` — hub entity with 5,000 edges → ≤ `max_degree_per_hop` per hop, completes under `timeout_ms`
 - `[T]` `[integration]` `test_neighbors_respects_max_hops` — `max_hops=2` never returns a 3-hop path
-- `[T]` `[integration]` `test_graph_upsert_idempotent` — re-run → zero new nodes/relationships
+- `[T]` `[integration]` `test_graph_upsert_idempotent` — assert a non-zero baseline count first, then re-run → zero new nodes/relationships. Zero-to-zero is not idempotence.
+- `[T][G]` `[integration]` `test_alias_edges_persisted` — resolution's alias edges reach Neo4j as `(:Entity)-[:ALIAS_OF]->(:Entity)`, non-empty, and losers are never deleted. BO-07 computes these with no sink; this is where they land.
+- `[T]` `[integration]` `test_extracted_relations_reach_graph` — end-to-end: ingest a corpus document, run extract → resolve, assert the relations the LLM extracted are queryable in Neo4j with provenance. The unit-level upsert tests all pass against hand-built `Relation` objects; nothing else proves the BO-07 → BO-08 handoff actually connects.
 - `[T][G]` `[integration]` `test_get_chunks_returns_sources` — hydrated chunks carry `sources`, not just `text`. Text without provenance makes every graph-path answer uncitable and silently fails `verify_citations`
 - `[T]` `[integration]` `test_get_chunks_fallback_path` — returns full text without touching Qdrant
 

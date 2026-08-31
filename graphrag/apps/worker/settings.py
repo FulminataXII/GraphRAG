@@ -18,8 +18,10 @@ from graphrag.adapters.telemetry.logging import configure_logging
 from graphrag.adapters.telemetry.otel import init_telemetry, shutdown_telemetry
 from graphrag.apps.api.main import Container
 from graphrag.apps.worker.tasks.delete import delete_document
+from graphrag.apps.worker.tasks.extract import extract_entities
 from graphrag.apps.worker.tasks.ingest import ingest_document
 from graphrag.apps.worker.tasks.project import project_chunk_payload
+from graphrag.apps.worker.tasks.resolve import resolve_entities
 from graphrag.config.settings import get_settings
 
 
@@ -42,11 +44,10 @@ class WorkerSettings:
 
     Contract:
         - functions = [ingest_document, extract_entities, resolve_entities, delete_document].
-          This BO registers only [ingest_document, delete_document] — `extract_entities`/
-          `resolve_entities` don't exist until BO-07. `IngestionService` already enqueues
-          `extract_entities` jobs (BLUEPRINT §6.1 step 7); until BO-07 registers a function for
-          that task name, those jobs simply queue and wait, exactly like `Container.graph_store`
-          staying `None` until BO-08 (BO-03/04's precedent for landing a port before its BO).
+          BO-07 lands `extract_entities`/`resolve_entities` and registers both here — until now
+          `IngestionService`'s `extract_entities` enqueue (BLUEPRINT §6.1 step 7) simply queued
+          and waited, exactly like `Container.graph_store` staying `None` until BO-08 lands its
+          real adapter (BO-03/04's precedent for landing a port before its BO).
         - on_startup builds the Container and stores it on ctx; on_shutdown closes it.
         - max_jobs = ingestion.parallelism.max_concurrent_docs
         - retry_jobs=True, max_tries from ingestion.dead_letter.max_attempts
@@ -58,7 +59,12 @@ class WorkerSettings:
     would sit in `starting`/flap between healthy and unhealthy forever.
     """
 
-    functions: ClassVar[list[Any]] = [ingest_document, delete_document]
+    functions: ClassVar[list[Any]] = [
+        ingest_document,
+        extract_entities,
+        resolve_entities,
+        delete_document,
+    ]
     on_startup = staticmethod(_startup)
     on_shutdown = staticmethod(_shutdown)
     redis_settings = RedisSettings.from_dsn(get_settings().stores.redis.url)

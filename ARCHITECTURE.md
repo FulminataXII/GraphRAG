@@ -62,7 +62,7 @@ flowchart TB
         W1["ingest_document"]
         W2["extract_entities"]
         W3["resolve_entities"]
-        W4["index_graph"]
+        W4["project_payload"]
     end
 
     subgraph Ports["core/ports — Protocol interfaces (no I/O)"]
@@ -351,7 +351,7 @@ blocking, entity resolution, canonicalization — as reviewed in Steorts, *A Pri
 Cleaning Pipeline* ([arXiv:2307.13219](https://arxiv.org/abs/2307.13219)), which surveys the
 Fellegi–Sunter (1969) framework and Christen's indexing/blocking work:
 
-1. **Extract** — LLM call returning validated `EntityExtraction{entities: [{surface, type, span}], relations: [{src, dst, type, evidence_span}]}`. Run on the **bulk** model (high TPM) — see §4.3.
+1. **Extract** — LLM call returning validated `EntityExtraction{entities: [{chunk_id, surface, type, span}], relations: [{chunk_id, src, dst, type, evidence_span}]}`. Run on the **bulk** model — see §4.3. ⚠️ The binding constraint on bulk is **RPM, not TPM**: batch many chunks per request (`llm.batching.bulk_chunks_per_request`), never one call per chunk, or the worker stalls at the request ceiling while using a fraction of its token allowance. This is why every extracted item carries a `chunk_id` — in a batched response there is no other way to attribute an offset to a chunk.
 2. **Normalize** — NFKC, casefold, strip legal suffixes (`Inc|Ltd|LLC|Corp|Pvt`), strip honorifics, collapse punctuation. Deterministic and unit-testable with `hypothesis`.
 3. **Block (candidate generation)** — the step that avoids O(n²). Two blockers, unioned:
    - exact `normalized_name` lookup (Postgres/Neo4j index)
@@ -362,7 +362,12 @@ Fellegi–Sunter (1969) framework and Christen's indexing/blocking work:
    - `score ≤ auto_reject_threshold` → distinct
    - between → **gray band**: T0 leaves distinct + flags; T1 sends *only these* to an LLM adjudicator (cheap, because it is a tiny fraction of pairs)
 6. **Cluster** — union-find over merge edges → `canonical_id`. Canonical name = highest-frequency surface form. Losers become `(:Entity)-[:ALIAS_OF]->(:Entity)` — **never deleted**, so every merge is auditable and reversible.
-7. **Persist** — `MERGE` into Neo4j; upsert canonical name vector into Qdrant `entities`.
+7. **Persist** — upsert canonical name vector into Qdrant `entities`; `MERGE` into Neo4j.
+   ⚠️ **Split across two build orders.** BO-07 builds steps 1–6 and the Qdrant half of step 7.
+   The Neo4j half — relations, alias edges, `(:Entity)-[:ALIAS_OF]->(:Entity)` — lands in BO-08,
+   because `GraphStore` does not exist before then. Between the two, resolution computes alias
+   edges and relations that have **no sink**. That is expected, not a defect, but it means any
+   BO-08 gate counting rows in Neo4j can pass on an empty database: assert non-empty first.
 
 > **Roadmap credibility:** README states T2 replaces steps 4–5 with [Splink](https://pypi.org/project/splink/) (Fellegi–Sunter, DuckDB backend, unsupervised EM — no labelled data needed, links ~1M records on a laptop in about a minute). Naming the exact upgrade path is what makes the MVP read as *scoped*, not *naive*.
 

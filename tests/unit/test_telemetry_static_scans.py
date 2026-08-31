@@ -28,7 +28,6 @@ PENDING_INSTRUMENTS: frozenset[str] = frozenset(
         "retrieval_latency",  # BO-09: VectorRetriever/GraphRetriever.retrieve
         "answer_refused",  # BO-10: insufficient node
         "citations_invalid",  # BO-10: verify_citations node
-        "entities_merged",  # BO-07: ResolutionService
         "grader_degraded",  # BO-10: grade_context node
         "projection_lag",  # ProjectionService has no Clock/timestamp wiring yet
     }

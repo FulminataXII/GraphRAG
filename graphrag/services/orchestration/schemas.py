@@ -23,6 +23,15 @@ from graphrag.core.models import EntityType
 
 
 class MentionOut(BaseModel):
+    # `chunk_id` (BO-07 addition — see `services/resolution/../apps/worker/tasks/extract.py`'s
+    # module docstring for why): BLUEPRINT §6.4's sketch for this schema has no such field
+    # because its `extract_entities.j2` sketch renders exactly one chunk per call. BUILD_ORDER
+    # BO-07 requires batching many chunks into one `bulk`-role call (the RPM-bound role — see
+    # ARCHITECTURE §4.3), which makes offsets alone ambiguous across documents in the same
+    # prompt. Follows the *Out schema rule already stated below (str, not UUID) and the existing
+    # multi-document prompt convention (`chunks=[{chunk_id, text}, ...]`, see grade_context.j2 /
+    # generate.j2) rather than inventing a new one.
+    chunk_id: str = Field(description="Exactly one of the document ids given in the prompt")
     surface: str = Field(max_length=200, description="Exact text as it appears in the chunk")
     type: EntityType
     char_start: int = Field(ge=0)
@@ -31,6 +40,8 @@ class MentionOut(BaseModel):
 
 
 class RelationOut(BaseModel):
+    # See `MentionOut.chunk_id` above for why this field exists beyond BLUEPRINT's sketch.
+    chunk_id: str = Field(description="Exactly one of the document ids given in the prompt")
     src_surface: str = Field(description="Surface form of the source entity, not an id")
     dst_surface: str = Field(description="Surface form of the destination entity, not an id")
     type: str = Field(max_length=64, description="UPPER_SNAKE verb phrase, e.g. ACQUIRED")

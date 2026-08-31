@@ -171,7 +171,7 @@ gap: stop and report it rather than inventing one. Types are declared in exactly
 
 ### `core/events.py` — BO-01
 `JobEnvelope[P]` · `IngestDocumentPayload` · `ExtractEntitiesPayload` · `ProjectPayloadPayload` ·
-`DeleteDocumentPayload`
+`DeleteDocumentPayload` · `ResolveEntitiesPayload` (BO-07)
 
 ### `config/schema.py` — BO-00
 All `*Section` models, plus the nested spec models they contain: `RateLimitSpec`,
@@ -665,6 +665,16 @@ class ExtractEntitiesPayload(BaseModel):
 class ProjectPayloadPayload(BaseModel):
     """Batch of chunk_ids whose Qdrant payload must be re-derived from Postgres."""
     chunk_ids: list[UUID]
+
+class ResolveEntitiesPayload(BaseModel):
+    """Mentions from one document, ready to resolve. Added BO-07.
+
+    resolve_entities is a SEPARATE arq function from extract_entities, not a phase inside it:
+    extraction is LLM-bound and quota-limited, resolution is CPU- and vector-bound, and they
+    retry on different failure modes. Folding them into one task means an extraction 429
+    re-runs resolution and vice versa.
+    """
+    doc_id: str; mentions: list[Mention]
 
 class DeleteDocumentPayload(BaseModel):
     doc_id: str
@@ -1529,7 +1539,7 @@ def choose_canonical(members: Sequence[Mention]) -> str:
 
 # service.py
 class ResolutionService:
-    """Contract of resolve(mentions) -> ResolutionResult:
+    """Contract of resolve(mentions) -> ResolutionResult(entities, aliases, flagged):
         normalize -> block -> score -> decide -> cluster -> choose canonical
         - Emits entities_merged{band} metrics for merge/gray/reject.
         - gray_band_action='flag' records the pair in the result but does NOT merge.
@@ -1646,16 +1656,24 @@ def remaining(state: QueryState, limits: BudgetLimits) -> BudgetLimits:
 #     one it couldn't determine; require it and let the repair loop handle refusal.
 
 class MentionOut(BaseModel):
+    chunk_id: str = Field(description="Which chunk in the batch this came from — exactly one of "
+                                      "the ids given in the request")
     surface: str = Field(max_length=200, description="Exact text as it appears in the chunk")
     type: EntityType
     char_start: int = Field(ge=0); char_end: int = Field(ge=0)
     confidence: float = Field(ge=0.0, le=1.0)
 
 class RelationOut(BaseModel):
+    chunk_id: str = Field(description="Which chunk in the batch this came from")
     src_surface: str; dst_surface: str      # surfaces, NOT ids — resolution assigns ids later
     type: str = Field(max_length=64, description="UPPER_SNAKE verb phrase, e.g. ACQUIRED")
     confidence: float = Field(ge=0.0, le=1.0)
     evidence_span: str = Field(max_length=500, description="Verbatim sentence supporting this")
+
+# ⚠️ chunk_id is mandatory on both because the bulk role is RPM-bound, so extraction sends
+# MANY chunks per request (llm.batching.bulk_chunks_per_request). Without it, offsets in a
+# batched response cannot be attributed to a chunk and test_extraction_spans_within_chunk
+# cannot be checked at all. Added BO-07.
 
 class CitationOut(BaseModel):
     chunk_id: str = Field(description="Exactly one of the ids given in the context block")
@@ -1873,7 +1891,12 @@ class WorkerSettings:
     """arq worker configuration.
 
     Contract:
-        - functions = [ingest_document, extract_entities, resolve_entities, delete_document]
+        - functions = [ingest_document, extract_entities, resolve_entities, project_payload,
+          delete_document]
+          ⚠️ Every task file in this directory must appear here. A task that exists but is not
+          registered is enqueued and never runs — arq drops the job with no error the caller
+          sees. project_payload was omitted from this list through BO-05/06; verify it is
+          actually registered in code, not just listed here.
         - on_startup builds the Container and stores it on ctx; on_shutdown closes it.
         - max_jobs = ingestion.parallelism.max_concurrent_docs
         - retry_jobs=True, max_tries from ingestion.dead_letter.max_attempts

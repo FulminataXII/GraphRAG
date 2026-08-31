@@ -34,7 +34,12 @@ def test_projection_worker_queue_name_from_config(worker_settings_module) -> Non
 
 def test_worker_settings_functions_registered(worker_settings_module) -> None:
     names = {fn.__name__ for fn in worker_settings_module.WorkerSettings.functions}
-    assert names == {"ingest_document", "delete_document"}
+    assert names == {
+        "ingest_document",
+        "extract_entities",
+        "resolve_entities",
+        "delete_document",
+    }
 
 
 def test_worker_settings_max_tries_from_dead_letter_config(worker_settings_module) -> None:

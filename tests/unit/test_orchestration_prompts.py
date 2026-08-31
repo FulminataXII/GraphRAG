@@ -52,12 +52,15 @@ def test_prompts_wrap_documents_in_untrusted_delimiters(name: str) -> None:
 
 
 def test_extract_entities_wraps_document_in_untrusted_delimiters() -> None:
-    rendered = prompts.render(
-        "extract_entities.j2", chunk_id="c1", text="Acme acquired Widgets Inc. in 2024."
-    )
+    """`extract_entities.j2` batches many chunks per call (BUILD_ORDER BO-07 / ARCHITECTURE
+    §4.3 — the `bulk` role is RPM-bound, so one call per chunk stalls at the request ceiling),
+    so — like grade_context.j2/generate.j2 — it takes a `chunks=[{chunk_id, text}, ...]` list
+    rather than a single chunk_id/text pair."""
+    rendered = prompts.render("extract_entities.j2", chunks=_CHUNKS)
     assert '<document id="c1">' in rendered
     assert "</document>" in rendered
     assert "untrusted" in rendered.lower()
+    assert "Acme acquired Widgets Inc. in 2024." in rendered
 
 
 def test_route_plan_renders_with_question() -> None:

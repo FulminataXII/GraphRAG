@@ -1,0 +1,2115 @@
+{
+  "rule": "Label MERGE when the corpus establishes, via the surrounding sentence(s) in the cited source document(s), that the two surface forms refer to the SAME specific real-world entity -- either an identical name repeated across documents, a documented former/legal name (e.g. 'Apple Computer' for 'Apple Inc.'), or a person referred to first by full name and later by surname alone within the same corpus. Label REJECT when the two surface forms name DIFFERENT real-world entities, including cases that are lexically close or thematically related but not identical: a company is not its own product/service sub-brand (e.g. 'Apple' the company vs 'Apple Intelligence' the software feature), a chip variant is not a sibling chip variant (e.g. 'M5' vs 'M5 Pro'), a product line is not a different product line (e.g. 'MacBook Air' vs 'MacBook Pro'), and two distinct named people or organizations are never each other. Every surface string below is verified (at fixture-generation time, via the real graphrag.services.ingestion.parser.DocumentParser) to literally occur in its cited corpus/ source file -- none is an invented string.",
+  "pairs": [
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple",
+      "b_type": "ORG",
+      "b_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "label": "merge",
+      "cluster": "apple_company"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple",
+      "b_type": "ORG",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "merge",
+      "cluster": "apple_company"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "b_surface": "Apple",
+      "b_type": "ORG",
+      "b_source": "04_apple-opens-advanced-manufacturing-center-in-houston.txt",
+      "label": "merge",
+      "cluster": "apple_company"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "b_surface": "Apple",
+      "b_type": "ORG",
+      "b_source": "10_apple-introduces-the-new-macbook-air-with-m5.docx",
+      "label": "merge",
+      "cluster": "apple_company"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "03_apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute.pdf",
+      "b_surface": "Apple",
+      "b_type": "ORG",
+      "b_source": "07_say-hello-to-macbook-neo.pdf",
+      "label": "merge",
+      "cluster": "apple_company"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "03_apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute.pdf",
+      "b_surface": "Apple Computer",
+      "b_type": "ORG",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "apple_company"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "04_apple-opens-advanced-manufacturing-center-in-houston.txt",
+      "b_surface": "Apple",
+      "b_type": "ORG",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "apple_company"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "05_apple-to-increase-spend-with-broadcom-to-produce-billions-more-us-chips.md",
+      "b_surface": "Apple",
+      "b_type": "ORG",
+      "b_source": "09_apple-debuts-m5-pro-and-m5-max-to-supercharge-the-most-demanding-pro-workflows.md",
+      "label": "merge",
+      "cluster": "apple_company"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "b_surface": "Apple",
+      "b_type": "ORG",
+      "b_source": "09_apple-debuts-m5-pro-and-m5-max-to-supercharge-the-most-demanding-pro-workflows.md",
+      "label": "merge",
+      "cluster": "apple_company"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "07_say-hello-to-macbook-neo.pdf",
+      "b_surface": "Apple",
+      "b_type": "ORG",
+      "b_source": "09_apple-debuts-m5-pro-and-m5-max-to-supercharge-the-most-demanding-pro-workflows.md",
+      "label": "merge",
+      "cluster": "apple_company"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "Apple",
+      "b_type": "ORG",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "apple_company"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "09_apple-debuts-m5-pro-and-m5-max-to-supercharge-the-most-demanding-pro-workflows.md",
+      "b_surface": "Apple Computer",
+      "b_type": "ORG",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "apple_company"
+    },
+    {
+      "a_surface": "Tim Cook",
+      "a_type": "PERSON",
+      "a_source": "04_apple-opens-advanced-manufacturing-center-in-houston.txt",
+      "b_surface": "Tim Cook",
+      "b_type": "PERSON",
+      "b_source": "05_apple-to-increase-spend-with-broadcom-to-produce-billions-more-us-chips.md",
+      "label": "merge",
+      "cluster": "tim_cook"
+    },
+    {
+      "a_surface": "Tim Cook",
+      "a_type": "PERSON",
+      "a_source": "04_apple-opens-advanced-manufacturing-center-in-houston.txt",
+      "b_surface": "Cook",
+      "b_type": "PERSON",
+      "b_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "label": "merge",
+      "cluster": "tim_cook"
+    },
+    {
+      "a_surface": "Tim Cook",
+      "a_type": "PERSON",
+      "a_source": "04_apple-opens-advanced-manufacturing-center-in-houston.txt",
+      "b_surface": "Cook",
+      "b_type": "PERSON",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "tim_cook"
+    },
+    {
+      "a_surface": "Tim Cook",
+      "a_type": "PERSON",
+      "a_source": "05_apple-to-increase-spend-with-broadcom-to-produce-billions-more-us-chips.md",
+      "b_surface": "Tim Cook",
+      "b_type": "PERSON",
+      "b_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "label": "merge",
+      "cluster": "tim_cook"
+    },
+    {
+      "a_surface": "Tim Cook",
+      "a_type": "PERSON",
+      "a_source": "05_apple-to-increase-spend-with-broadcom-to-produce-billions-more-us-chips.md",
+      "b_surface": "Tim Cook",
+      "b_type": "PERSON",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "tim_cook"
+    },
+    {
+      "a_surface": "Tim Cook",
+      "a_type": "PERSON",
+      "a_source": "05_apple-to-increase-spend-with-broadcom-to-produce-billions-more-us-chips.md",
+      "b_surface": "Tim Cook",
+      "b_type": "PERSON",
+      "b_source": "12_Tim_Cook.txt",
+      "label": "merge",
+      "cluster": "tim_cook"
+    },
+    {
+      "a_surface": "Tim Cook",
+      "a_type": "PERSON",
+      "a_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "b_surface": "Tim Cook",
+      "b_type": "PERSON",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "tim_cook"
+    },
+    {
+      "a_surface": "Tim Cook",
+      "a_type": "PERSON",
+      "a_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "b_surface": "Tim Cook",
+      "b_type": "PERSON",
+      "b_source": "12_Tim_Cook.txt",
+      "label": "merge",
+      "cluster": "tim_cook"
+    },
+    {
+      "a_surface": "Cook",
+      "a_type": "PERSON",
+      "a_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "b_surface": "Tim Cook",
+      "b_type": "PERSON",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "tim_cook"
+    },
+    {
+      "a_surface": "Cook",
+      "a_type": "PERSON",
+      "a_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "b_surface": "Cook",
+      "b_type": "PERSON",
+      "b_source": "12_Tim_Cook.txt",
+      "label": "merge",
+      "cluster": "tim_cook"
+    },
+    {
+      "a_surface": "Tim Cook",
+      "a_type": "PERSON",
+      "a_source": "11_Apple_Inc..txt",
+      "b_surface": "Tim Cook",
+      "b_type": "PERSON",
+      "b_source": "12_Tim_Cook.txt",
+      "label": "merge",
+      "cluster": "tim_cook"
+    },
+    {
+      "a_surface": "Cook",
+      "a_type": "PERSON",
+      "a_source": "11_Apple_Inc..txt",
+      "b_surface": "Tim Cook",
+      "b_type": "PERSON",
+      "b_source": "12_Tim_Cook.txt",
+      "label": "merge",
+      "cluster": "tim_cook"
+    },
+    {
+      "a_surface": "John Ternus",
+      "a_type": "PERSON",
+      "a_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "b_surface": "Ternus",
+      "b_type": "PERSON",
+      "b_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "label": "merge",
+      "cluster": "john_ternus"
+    },
+    {
+      "a_surface": "John Ternus",
+      "a_type": "PERSON",
+      "a_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "b_surface": "John Ternus",
+      "b_type": "PERSON",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "merge",
+      "cluster": "john_ternus"
+    },
+    {
+      "a_surface": "John Ternus",
+      "a_type": "PERSON",
+      "a_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "b_surface": "John Ternus",
+      "b_type": "PERSON",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "john_ternus"
+    },
+    {
+      "a_surface": "Ternus",
+      "a_type": "PERSON",
+      "a_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "b_surface": "John Ternus",
+      "b_type": "PERSON",
+      "b_source": "07_say-hello-to-macbook-neo.pdf",
+      "label": "merge",
+      "cluster": "john_ternus"
+    },
+    {
+      "a_surface": "Ternus",
+      "a_type": "PERSON",
+      "a_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "b_surface": "John Ternus",
+      "b_type": "PERSON",
+      "b_source": "10_apple-introduces-the-new-macbook-air-with-m5.docx",
+      "label": "merge",
+      "cluster": "john_ternus"
+    },
+    {
+      "a_surface": "Ternus",
+      "a_type": "PERSON",
+      "a_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "b_surface": "Ternus",
+      "b_type": "PERSON",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "john_ternus"
+    },
+    {
+      "a_surface": "John Ternus",
+      "a_type": "PERSON",
+      "a_source": "07_say-hello-to-macbook-neo.pdf",
+      "b_surface": "John Ternus",
+      "b_type": "PERSON",
+      "b_source": "10_apple-introduces-the-new-macbook-air-with-m5.docx",
+      "label": "merge",
+      "cluster": "john_ternus"
+    },
+    {
+      "a_surface": "John Ternus",
+      "a_type": "PERSON",
+      "a_source": "07_say-hello-to-macbook-neo.pdf",
+      "b_surface": "Ternus",
+      "b_type": "PERSON",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "john_ternus"
+    },
+    {
+      "a_surface": "John Ternus",
+      "a_type": "PERSON",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "John Ternus",
+      "b_type": "PERSON",
+      "b_source": "10_apple-introduces-the-new-macbook-air-with-m5.docx",
+      "label": "merge",
+      "cluster": "john_ternus"
+    },
+    {
+      "a_surface": "John Ternus",
+      "a_type": "PERSON",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "John Ternus",
+      "b_type": "PERSON",
+      "b_source": "12_Tim_Cook.txt",
+      "label": "merge",
+      "cluster": "john_ternus"
+    },
+    {
+      "a_surface": "John Ternus",
+      "a_type": "PERSON",
+      "a_source": "10_apple-introduces-the-new-macbook-air-with-m5.docx",
+      "b_surface": "Ternus",
+      "b_type": "PERSON",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "john_ternus"
+    },
+    {
+      "a_surface": "John Ternus",
+      "a_type": "PERSON",
+      "a_source": "11_Apple_Inc..txt",
+      "b_surface": "Ternus",
+      "b_type": "PERSON",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "john_ternus"
+    },
+    {
+      "a_surface": "Arthur Levinson",
+      "a_type": "PERSON",
+      "a_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "b_surface": "Levinson",
+      "b_type": "PERSON",
+      "b_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "label": "merge",
+      "cluster": "arthur_levinson"
+    },
+    {
+      "a_surface": "Arthur Levinson",
+      "a_type": "PERSON",
+      "a_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "b_surface": "Arthur D. Levinson",
+      "b_type": "PERSON",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "arthur_levinson"
+    },
+    {
+      "a_surface": "Arthur Levinson",
+      "a_type": "PERSON",
+      "a_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "b_surface": "Arthur Levinson",
+      "b_type": "PERSON",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "arthur_levinson"
+    },
+    {
+      "a_surface": "Arthur Levinson",
+      "a_type": "PERSON",
+      "a_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "b_surface": "Arthur D. Levinson",
+      "b_type": "PERSON",
+      "b_source": "13_Arthur_D._Levinson.txt",
+      "label": "merge",
+      "cluster": "arthur_levinson"
+    },
+    {
+      "a_surface": "Levinson",
+      "a_type": "PERSON",
+      "a_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "b_surface": "Arthur D. Levinson",
+      "b_type": "PERSON",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "arthur_levinson"
+    },
+    {
+      "a_surface": "Levinson",
+      "a_type": "PERSON",
+      "a_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "b_surface": "Arthur Levinson",
+      "b_type": "PERSON",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "arthur_levinson"
+    },
+    {
+      "a_surface": "Levinson",
+      "a_type": "PERSON",
+      "a_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "b_surface": "Arthur D. Levinson",
+      "b_type": "PERSON",
+      "b_source": "13_Arthur_D._Levinson.txt",
+      "label": "merge",
+      "cluster": "arthur_levinson"
+    },
+    {
+      "a_surface": "Levinson",
+      "a_type": "PERSON",
+      "a_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "b_surface": "Levinson",
+      "b_type": "PERSON",
+      "b_source": "13_Arthur_D._Levinson.txt",
+      "label": "merge",
+      "cluster": "arthur_levinson"
+    },
+    {
+      "a_surface": "Arthur D. Levinson",
+      "a_type": "PERSON",
+      "a_source": "11_Apple_Inc..txt",
+      "b_surface": "Arthur D. Levinson",
+      "b_type": "PERSON",
+      "b_source": "13_Arthur_D._Levinson.txt",
+      "label": "merge",
+      "cluster": "arthur_levinson"
+    },
+    {
+      "a_surface": "Arthur D. Levinson",
+      "a_type": "PERSON",
+      "a_source": "11_Apple_Inc..txt",
+      "b_surface": "Levinson",
+      "b_type": "PERSON",
+      "b_source": "13_Arthur_D._Levinson.txt",
+      "label": "merge",
+      "cluster": "arthur_levinson"
+    },
+    {
+      "a_surface": "Arthur Levinson",
+      "a_type": "PERSON",
+      "a_source": "11_Apple_Inc..txt",
+      "b_surface": "Arthur D. Levinson",
+      "b_type": "PERSON",
+      "b_source": "13_Arthur_D._Levinson.txt",
+      "label": "merge",
+      "cluster": "arthur_levinson"
+    },
+    {
+      "a_surface": "Arthur Levinson",
+      "a_type": "PERSON",
+      "a_source": "11_Apple_Inc..txt",
+      "b_surface": "Levinson",
+      "b_type": "PERSON",
+      "b_source": "13_Arthur_D._Levinson.txt",
+      "label": "merge",
+      "cluster": "arthur_levinson"
+    },
+    {
+      "a_surface": "Calico",
+      "a_type": "ORG",
+      "a_source": "13_Arthur_D._Levinson.txt",
+      "b_surface": "Calico",
+      "b_type": "ORG",
+      "b_source": "14_Calico_(company).txt",
+      "label": "merge",
+      "cluster": "calico"
+    },
+    {
+      "a_surface": "Calico",
+      "a_type": "ORG",
+      "a_source": "13_Arthur_D._Levinson.txt",
+      "b_surface": "Calico Life Sciences",
+      "b_type": "ORG",
+      "b_source": "14_Calico_(company).txt",
+      "label": "merge",
+      "cluster": "calico"
+    },
+    {
+      "a_surface": "Calico",
+      "a_type": "ORG",
+      "a_source": "14_Calico_(company).txt",
+      "b_surface": "Calico Life Sciences",
+      "b_type": "ORG",
+      "b_source": "14_Calico_(company).txt",
+      "label": "merge",
+      "cluster": "calico"
+    },
+    {
+      "a_surface": "Johny Srouji",
+      "a_type": "PERSON",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Johny Srouji",
+      "b_type": "PERSON",
+      "b_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "label": "merge",
+      "cluster": "johny_srouji"
+    },
+    {
+      "a_surface": "Johny Srouji",
+      "a_type": "PERSON",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Johny Srouji",
+      "b_type": "PERSON",
+      "b_source": "09_apple-debuts-m5-pro-and-m5-max-to-supercharge-the-most-demanding-pro-workflows.md",
+      "label": "merge",
+      "cluster": "johny_srouji"
+    },
+    {
+      "a_surface": "Johny Srouji",
+      "a_type": "PERSON",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Johny Srouji",
+      "b_type": "PERSON",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "johny_srouji"
+    },
+    {
+      "a_surface": "Johny Srouji",
+      "a_type": "PERSON",
+      "a_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "b_surface": "Johny Srouji",
+      "b_type": "PERSON",
+      "b_source": "09_apple-debuts-m5-pro-and-m5-max-to-supercharge-the-most-demanding-pro-workflows.md",
+      "label": "merge",
+      "cluster": "johny_srouji"
+    },
+    {
+      "a_surface": "Johny Srouji",
+      "a_type": "PERSON",
+      "a_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "b_surface": "Johny Srouji",
+      "b_type": "PERSON",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "johny_srouji"
+    },
+    {
+      "a_surface": "Johny Srouji",
+      "a_type": "PERSON",
+      "a_source": "09_apple-debuts-m5-pro-and-m5-max-to-supercharge-the-most-demanding-pro-workflows.md",
+      "b_surface": "Johny Srouji",
+      "b_type": "PERSON",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "johny_srouji"
+    },
+    {
+      "a_surface": "M5",
+      "a_type": "PRODUCT",
+      "a_source": "03_apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute.pdf",
+      "b_surface": "M5",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "merge",
+      "cluster": "m5"
+    },
+    {
+      "a_surface": "M5",
+      "a_type": "PRODUCT",
+      "a_source": "03_apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute.pdf",
+      "b_surface": "M5",
+      "b_type": "PRODUCT",
+      "b_source": "09_apple-debuts-m5-pro-and-m5-max-to-supercharge-the-most-demanding-pro-workflows.md",
+      "label": "merge",
+      "cluster": "m5"
+    },
+    {
+      "a_surface": "M5",
+      "a_type": "PRODUCT",
+      "a_source": "03_apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute.pdf",
+      "b_surface": "M5",
+      "b_type": "PRODUCT",
+      "b_source": "10_apple-introduces-the-new-macbook-air-with-m5.docx",
+      "label": "merge",
+      "cluster": "m5"
+    },
+    {
+      "a_surface": "M5",
+      "a_type": "PRODUCT",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "M5",
+      "b_type": "PRODUCT",
+      "b_source": "09_apple-debuts-m5-pro-and-m5-max-to-supercharge-the-most-demanding-pro-workflows.md",
+      "label": "merge",
+      "cluster": "m5"
+    },
+    {
+      "a_surface": "M5",
+      "a_type": "PRODUCT",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "M5",
+      "b_type": "PRODUCT",
+      "b_source": "10_apple-introduces-the-new-macbook-air-with-m5.docx",
+      "label": "merge",
+      "cluster": "m5"
+    },
+    {
+      "a_surface": "M5",
+      "a_type": "PRODUCT",
+      "a_source": "09_apple-debuts-m5-pro-and-m5-max-to-supercharge-the-most-demanding-pro-workflows.md",
+      "b_surface": "M5",
+      "b_type": "PRODUCT",
+      "b_source": "10_apple-introduces-the-new-macbook-air-with-m5.docx",
+      "label": "merge",
+      "cluster": "m5"
+    },
+    {
+      "a_surface": "M5 Pro",
+      "a_type": "PRODUCT",
+      "a_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "b_surface": "M5 Pro",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "merge",
+      "cluster": "m5_pro"
+    },
+    {
+      "a_surface": "M5 Pro",
+      "a_type": "PRODUCT",
+      "a_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "b_surface": "M5 Pro",
+      "b_type": "PRODUCT",
+      "b_source": "09_apple-debuts-m5-pro-and-m5-max-to-supercharge-the-most-demanding-pro-workflows.md",
+      "label": "merge",
+      "cluster": "m5_pro"
+    },
+    {
+      "a_surface": "M5 Pro",
+      "a_type": "PRODUCT",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "M5 Pro",
+      "b_type": "PRODUCT",
+      "b_source": "09_apple-debuts-m5-pro-and-m5-max-to-supercharge-the-most-demanding-pro-workflows.md",
+      "label": "merge",
+      "cluster": "m5_pro"
+    },
+    {
+      "a_surface": "M5 Max",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "M5 Max",
+      "b_type": "PRODUCT",
+      "b_source": "03_apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute.pdf",
+      "label": "merge",
+      "cluster": "m5_max"
+    },
+    {
+      "a_surface": "M5 Max",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "M5 Max",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "merge",
+      "cluster": "m5_max"
+    },
+    {
+      "a_surface": "M5 Max",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "M5 Max",
+      "b_type": "PRODUCT",
+      "b_source": "09_apple-debuts-m5-pro-and-m5-max-to-supercharge-the-most-demanding-pro-workflows.md",
+      "label": "merge",
+      "cluster": "m5_max"
+    },
+    {
+      "a_surface": "M5 Max",
+      "a_type": "PRODUCT",
+      "a_source": "03_apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute.pdf",
+      "b_surface": "M5 Max",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "merge",
+      "cluster": "m5_max"
+    },
+    {
+      "a_surface": "M5 Max",
+      "a_type": "PRODUCT",
+      "a_source": "03_apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute.pdf",
+      "b_surface": "M5 Max",
+      "b_type": "PRODUCT",
+      "b_source": "09_apple-debuts-m5-pro-and-m5-max-to-supercharge-the-most-demanding-pro-workflows.md",
+      "label": "merge",
+      "cluster": "m5_max"
+    },
+    {
+      "a_surface": "M5 Max",
+      "a_type": "PRODUCT",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "M5 Max",
+      "b_type": "PRODUCT",
+      "b_source": "09_apple-debuts-m5-pro-and-m5-max-to-supercharge-the-most-demanding-pro-workflows.md",
+      "label": "merge",
+      "cluster": "m5_max"
+    },
+    {
+      "a_surface": "M5 Ultra",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "M5 Ultra",
+      "b_type": "PRODUCT",
+      "b_source": "03_apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute.pdf",
+      "label": "merge",
+      "cluster": "m5_ultra"
+    },
+    {
+      "a_surface": "M6",
+      "a_type": "PRODUCT",
+      "a_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "b_surface": "M6",
+      "b_type": "PRODUCT",
+      "b_source": "03_apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute.pdf",
+      "label": "merge",
+      "cluster": "m6"
+    },
+    {
+      "a_surface": "Apple Intelligence",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple Intelligence",
+      "b_type": "PRODUCT",
+      "b_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "label": "merge",
+      "cluster": "apple_intelligence"
+    },
+    {
+      "a_surface": "Apple Intelligence",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple Intelligence",
+      "b_type": "PRODUCT",
+      "b_source": "07_say-hello-to-macbook-neo.pdf",
+      "label": "merge",
+      "cluster": "apple_intelligence"
+    },
+    {
+      "a_surface": "Apple Intelligence",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple Intelligence",
+      "b_type": "PRODUCT",
+      "b_source": "09_apple-debuts-m5-pro-and-m5-max-to-supercharge-the-most-demanding-pro-workflows.md",
+      "label": "merge",
+      "cluster": "apple_intelligence"
+    },
+    {
+      "a_surface": "Apple Intelligence",
+      "a_type": "PRODUCT",
+      "a_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "b_surface": "Apple Intelligence",
+      "b_type": "PRODUCT",
+      "b_source": "03_apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute.pdf",
+      "label": "merge",
+      "cluster": "apple_intelligence"
+    },
+    {
+      "a_surface": "Apple Intelligence",
+      "a_type": "PRODUCT",
+      "a_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "b_surface": "Apple Intelligence",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "merge",
+      "cluster": "apple_intelligence"
+    },
+    {
+      "a_surface": "Apple Intelligence",
+      "a_type": "PRODUCT",
+      "a_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "b_surface": "Apple Intelligence",
+      "b_type": "PRODUCT",
+      "b_source": "10_apple-introduces-the-new-macbook-air-with-m5.docx",
+      "label": "merge",
+      "cluster": "apple_intelligence"
+    },
+    {
+      "a_surface": "Apple Intelligence",
+      "a_type": "PRODUCT",
+      "a_source": "03_apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute.pdf",
+      "b_surface": "Apple Intelligence",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "merge",
+      "cluster": "apple_intelligence"
+    },
+    {
+      "a_surface": "Apple Intelligence",
+      "a_type": "PRODUCT",
+      "a_source": "03_apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute.pdf",
+      "b_surface": "Apple Intelligence",
+      "b_type": "PRODUCT",
+      "b_source": "10_apple-introduces-the-new-macbook-air-with-m5.docx",
+      "label": "merge",
+      "cluster": "apple_intelligence"
+    },
+    {
+      "a_surface": "Apple Intelligence",
+      "a_type": "PRODUCT",
+      "a_source": "07_say-hello-to-macbook-neo.pdf",
+      "b_surface": "Apple Intelligence",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "merge",
+      "cluster": "apple_intelligence"
+    },
+    {
+      "a_surface": "Apple Intelligence",
+      "a_type": "PRODUCT",
+      "a_source": "07_say-hello-to-macbook-neo.pdf",
+      "b_surface": "Apple Intelligence",
+      "b_type": "PRODUCT",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "apple_intelligence"
+    },
+    {
+      "a_surface": "Apple Intelligence",
+      "a_type": "PRODUCT",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "Apple Intelligence",
+      "b_type": "PRODUCT",
+      "b_source": "10_apple-introduces-the-new-macbook-air-with-m5.docx",
+      "label": "merge",
+      "cluster": "apple_intelligence"
+    },
+    {
+      "a_surface": "Apple Intelligence",
+      "a_type": "PRODUCT",
+      "a_source": "09_apple-debuts-m5-pro-and-m5-max-to-supercharge-the-most-demanding-pro-workflows.md",
+      "b_surface": "Apple Intelligence",
+      "b_type": "PRODUCT",
+      "b_source": "10_apple-introduces-the-new-macbook-air-with-m5.docx",
+      "label": "merge",
+      "cluster": "apple_intelligence"
+    },
+    {
+      "a_surface": "Apple Store",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple Store",
+      "b_type": "PRODUCT",
+      "b_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "label": "merge",
+      "cluster": "apple_store"
+    },
+    {
+      "a_surface": "Apple Store",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple Store",
+      "b_type": "PRODUCT",
+      "b_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "label": "merge",
+      "cluster": "apple_store"
+    },
+    {
+      "a_surface": "Apple Store",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple Store",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "merge",
+      "cluster": "apple_store"
+    },
+    {
+      "a_surface": "Apple Store",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple Store",
+      "b_type": "PRODUCT",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "apple_store"
+    },
+    {
+      "a_surface": "Apple Store",
+      "a_type": "PRODUCT",
+      "a_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "b_surface": "Apple Store",
+      "b_type": "PRODUCT",
+      "b_source": "07_say-hello-to-macbook-neo.pdf",
+      "label": "merge",
+      "cluster": "apple_store"
+    },
+    {
+      "a_surface": "Apple Store",
+      "a_type": "PRODUCT",
+      "a_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "b_surface": "Apple Store",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "merge",
+      "cluster": "apple_store"
+    },
+    {
+      "a_surface": "Apple Store",
+      "a_type": "PRODUCT",
+      "a_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "b_surface": "Apple Store",
+      "b_type": "PRODUCT",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "apple_store"
+    },
+    {
+      "a_surface": "Apple Store",
+      "a_type": "PRODUCT",
+      "a_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "b_surface": "Apple Store",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "merge",
+      "cluster": "apple_store"
+    },
+    {
+      "a_surface": "Apple Store",
+      "a_type": "PRODUCT",
+      "a_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "b_surface": "Apple Store",
+      "b_type": "PRODUCT",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "apple_store"
+    },
+    {
+      "a_surface": "Apple Store",
+      "a_type": "PRODUCT",
+      "a_source": "07_say-hello-to-macbook-neo.pdf",
+      "b_surface": "Apple Store",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "merge",
+      "cluster": "apple_store"
+    },
+    {
+      "a_surface": "Apple Store",
+      "a_type": "PRODUCT",
+      "a_source": "07_say-hello-to-macbook-neo.pdf",
+      "b_surface": "Apple Store",
+      "b_type": "PRODUCT",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "apple_store"
+    },
+    {
+      "a_surface": "Apple Store",
+      "a_type": "PRODUCT",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "Apple Store",
+      "b_type": "PRODUCT",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "apple_store"
+    },
+    {
+      "a_surface": "Apple Watch",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple Watch",
+      "b_type": "PRODUCT",
+      "b_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "label": "merge",
+      "cluster": "apple_watch"
+    },
+    {
+      "a_surface": "Apple Watch",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple Watch",
+      "b_type": "PRODUCT",
+      "b_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "label": "merge",
+      "cluster": "apple_watch"
+    },
+    {
+      "a_surface": "Apple Watch",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple Watch",
+      "b_type": "PRODUCT",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "apple_watch"
+    },
+    {
+      "a_surface": "Apple Watch",
+      "a_type": "PRODUCT",
+      "a_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "b_surface": "Apple Watch",
+      "b_type": "PRODUCT",
+      "b_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "label": "merge",
+      "cluster": "apple_watch"
+    },
+    {
+      "a_surface": "Apple Watch",
+      "a_type": "PRODUCT",
+      "a_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "b_surface": "Apple Watch",
+      "b_type": "PRODUCT",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "apple_watch"
+    },
+    {
+      "a_surface": "Apple Watch",
+      "a_type": "PRODUCT",
+      "a_source": "03_apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute.pdf",
+      "b_surface": "Apple Watch",
+      "b_type": "PRODUCT",
+      "b_source": "07_say-hello-to-macbook-neo.pdf",
+      "label": "merge",
+      "cluster": "apple_watch"
+    },
+    {
+      "a_surface": "Apple Watch",
+      "a_type": "PRODUCT",
+      "a_source": "04_apple-opens-advanced-manufacturing-center-in-houston.txt",
+      "b_surface": "Apple Watch",
+      "b_type": "PRODUCT",
+      "b_source": "05_apple-to-increase-spend-with-broadcom-to-produce-billions-more-us-chips.md",
+      "label": "merge",
+      "cluster": "apple_watch"
+    },
+    {
+      "a_surface": "Apple Watch",
+      "a_type": "PRODUCT",
+      "a_source": "04_apple-opens-advanced-manufacturing-center-in-houston.txt",
+      "b_surface": "Apple Watch",
+      "b_type": "PRODUCT",
+      "b_source": "10_apple-introduces-the-new-macbook-air-with-m5.docx",
+      "label": "merge",
+      "cluster": "apple_watch"
+    },
+    {
+      "a_surface": "Apple Watch",
+      "a_type": "PRODUCT",
+      "a_source": "05_apple-to-increase-spend-with-broadcom-to-produce-billions-more-us-chips.md",
+      "b_surface": "Apple Watch",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "merge",
+      "cluster": "apple_watch"
+    },
+    {
+      "a_surface": "Apple Watch",
+      "a_type": "PRODUCT",
+      "a_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "b_surface": "Apple Watch",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "merge",
+      "cluster": "apple_watch"
+    },
+    {
+      "a_surface": "Apple Watch",
+      "a_type": "PRODUCT",
+      "a_source": "07_say-hello-to-macbook-neo.pdf",
+      "b_surface": "Apple Watch",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "merge",
+      "cluster": "apple_watch"
+    },
+    {
+      "a_surface": "Apple Watch",
+      "a_type": "PRODUCT",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "Apple Watch",
+      "b_type": "PRODUCT",
+      "b_source": "10_apple-introduces-the-new-macbook-air-with-m5.docx",
+      "label": "merge",
+      "cluster": "apple_watch"
+    },
+    {
+      "a_surface": "Apple TV",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple TV",
+      "b_type": "PRODUCT",
+      "b_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "label": "merge",
+      "cluster": "apple_tv"
+    },
+    {
+      "a_surface": "Apple TV",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple TV",
+      "b_type": "PRODUCT",
+      "b_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "label": "merge",
+      "cluster": "apple_tv"
+    },
+    {
+      "a_surface": "Apple TV",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple TV",
+      "b_type": "PRODUCT",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "apple_tv"
+    },
+    {
+      "a_surface": "Apple TV",
+      "a_type": "PRODUCT",
+      "a_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "b_surface": "Apple TV",
+      "b_type": "PRODUCT",
+      "b_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "label": "merge",
+      "cluster": "apple_tv"
+    },
+    {
+      "a_surface": "Apple TV",
+      "a_type": "PRODUCT",
+      "a_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "b_surface": "Apple TV",
+      "b_type": "PRODUCT",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "apple_tv"
+    },
+    {
+      "a_surface": "Apple TV",
+      "a_type": "PRODUCT",
+      "a_source": "03_apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute.pdf",
+      "b_surface": "Apple TV",
+      "b_type": "PRODUCT",
+      "b_source": "07_say-hello-to-macbook-neo.pdf",
+      "label": "merge",
+      "cluster": "apple_tv"
+    },
+    {
+      "a_surface": "Apple TV",
+      "a_type": "PRODUCT",
+      "a_source": "04_apple-opens-advanced-manufacturing-center-in-houston.txt",
+      "b_surface": "Apple TV",
+      "b_type": "PRODUCT",
+      "b_source": "05_apple-to-increase-spend-with-broadcom-to-produce-billions-more-us-chips.md",
+      "label": "merge",
+      "cluster": "apple_tv"
+    },
+    {
+      "a_surface": "Apple TV",
+      "a_type": "PRODUCT",
+      "a_source": "04_apple-opens-advanced-manufacturing-center-in-houston.txt",
+      "b_surface": "Apple TV",
+      "b_type": "PRODUCT",
+      "b_source": "10_apple-introduces-the-new-macbook-air-with-m5.docx",
+      "label": "merge",
+      "cluster": "apple_tv"
+    },
+    {
+      "a_surface": "Apple TV",
+      "a_type": "PRODUCT",
+      "a_source": "05_apple-to-increase-spend-with-broadcom-to-produce-billions-more-us-chips.md",
+      "b_surface": "Apple TV",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "merge",
+      "cluster": "apple_tv"
+    },
+    {
+      "a_surface": "Apple TV",
+      "a_type": "PRODUCT",
+      "a_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "b_surface": "Apple TV",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "merge",
+      "cluster": "apple_tv"
+    },
+    {
+      "a_surface": "Apple TV",
+      "a_type": "PRODUCT",
+      "a_source": "07_say-hello-to-macbook-neo.pdf",
+      "b_surface": "Apple TV",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "merge",
+      "cluster": "apple_tv"
+    },
+    {
+      "a_surface": "Apple TV",
+      "a_type": "PRODUCT",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "Apple TV",
+      "b_type": "PRODUCT",
+      "b_source": "10_apple-introduces-the-new-macbook-air-with-m5.docx",
+      "label": "merge",
+      "cluster": "apple_tv"
+    },
+    {
+      "a_surface": "Apple Card",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple Card",
+      "b_type": "PRODUCT",
+      "b_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "label": "merge",
+      "cluster": "apple_card"
+    },
+    {
+      "a_surface": "Apple Card",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple Card",
+      "b_type": "PRODUCT",
+      "b_source": "07_say-hello-to-macbook-neo.pdf",
+      "label": "merge",
+      "cluster": "apple_card"
+    },
+    {
+      "a_surface": "Apple Card",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple Card",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "merge",
+      "cluster": "apple_card"
+    },
+    {
+      "a_surface": "Apple Card",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple Card",
+      "b_type": "PRODUCT",
+      "b_source": "10_apple-introduces-the-new-macbook-air-with-m5.docx",
+      "label": "merge",
+      "cluster": "apple_card"
+    },
+    {
+      "a_surface": "Apple Card",
+      "a_type": "PRODUCT",
+      "a_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "b_surface": "Apple Card",
+      "b_type": "PRODUCT",
+      "b_source": "07_say-hello-to-macbook-neo.pdf",
+      "label": "merge",
+      "cluster": "apple_card"
+    },
+    {
+      "a_surface": "Apple Card",
+      "a_type": "PRODUCT",
+      "a_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "b_surface": "Apple Card",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "merge",
+      "cluster": "apple_card"
+    },
+    {
+      "a_surface": "Apple Card",
+      "a_type": "PRODUCT",
+      "a_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "b_surface": "Apple Card",
+      "b_type": "PRODUCT",
+      "b_source": "10_apple-introduces-the-new-macbook-air-with-m5.docx",
+      "label": "merge",
+      "cluster": "apple_card"
+    },
+    {
+      "a_surface": "Apple Card",
+      "a_type": "PRODUCT",
+      "a_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "b_surface": "Apple Card",
+      "b_type": "PRODUCT",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "apple_card"
+    },
+    {
+      "a_surface": "Apple Card",
+      "a_type": "PRODUCT",
+      "a_source": "07_say-hello-to-macbook-neo.pdf",
+      "b_surface": "Apple Card",
+      "b_type": "PRODUCT",
+      "b_source": "10_apple-introduces-the-new-macbook-air-with-m5.docx",
+      "label": "merge",
+      "cluster": "apple_card"
+    },
+    {
+      "a_surface": "Apple Card",
+      "a_type": "PRODUCT",
+      "a_source": "07_say-hello-to-macbook-neo.pdf",
+      "b_surface": "Apple Card",
+      "b_type": "PRODUCT",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "apple_card"
+    },
+    {
+      "a_surface": "Apple Card",
+      "a_type": "PRODUCT",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "Apple Card",
+      "b_type": "PRODUCT",
+      "b_source": "10_apple-introduces-the-new-macbook-air-with-m5.docx",
+      "label": "merge",
+      "cluster": "apple_card"
+    },
+    {
+      "a_surface": "Apple Card",
+      "a_type": "PRODUCT",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "Apple Card",
+      "b_type": "PRODUCT",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "apple_card"
+    },
+    {
+      "a_surface": "Apple Pay",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple Pay",
+      "b_type": "PRODUCT",
+      "b_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "label": "merge",
+      "cluster": "apple_pay"
+    },
+    {
+      "a_surface": "Apple Pay",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple Pay",
+      "b_type": "PRODUCT",
+      "b_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "label": "merge",
+      "cluster": "apple_pay"
+    },
+    {
+      "a_surface": "Apple Pay",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple Pay",
+      "b_type": "PRODUCT",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "apple_pay"
+    },
+    {
+      "a_surface": "Apple Pay",
+      "a_type": "PRODUCT",
+      "a_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "b_surface": "Apple Pay",
+      "b_type": "PRODUCT",
+      "b_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "label": "merge",
+      "cluster": "apple_pay"
+    },
+    {
+      "a_surface": "Apple Pay",
+      "a_type": "PRODUCT",
+      "a_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "b_surface": "Apple Pay",
+      "b_type": "PRODUCT",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "apple_pay"
+    },
+    {
+      "a_surface": "Apple Pay",
+      "a_type": "PRODUCT",
+      "a_source": "03_apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute.pdf",
+      "b_surface": "Apple Pay",
+      "b_type": "PRODUCT",
+      "b_source": "07_say-hello-to-macbook-neo.pdf",
+      "label": "merge",
+      "cluster": "apple_pay"
+    },
+    {
+      "a_surface": "Apple Pay",
+      "a_type": "PRODUCT",
+      "a_source": "04_apple-opens-advanced-manufacturing-center-in-houston.txt",
+      "b_surface": "Apple Pay",
+      "b_type": "PRODUCT",
+      "b_source": "05_apple-to-increase-spend-with-broadcom-to-produce-billions-more-us-chips.md",
+      "label": "merge",
+      "cluster": "apple_pay"
+    },
+    {
+      "a_surface": "Apple Pay",
+      "a_type": "PRODUCT",
+      "a_source": "04_apple-opens-advanced-manufacturing-center-in-houston.txt",
+      "b_surface": "Apple Pay",
+      "b_type": "PRODUCT",
+      "b_source": "10_apple-introduces-the-new-macbook-air-with-m5.docx",
+      "label": "merge",
+      "cluster": "apple_pay"
+    },
+    {
+      "a_surface": "Apple Pay",
+      "a_type": "PRODUCT",
+      "a_source": "05_apple-to-increase-spend-with-broadcom-to-produce-billions-more-us-chips.md",
+      "b_surface": "Apple Pay",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "merge",
+      "cluster": "apple_pay"
+    },
+    {
+      "a_surface": "Apple Pay",
+      "a_type": "PRODUCT",
+      "a_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "b_surface": "Apple Pay",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "merge",
+      "cluster": "apple_pay"
+    },
+    {
+      "a_surface": "Apple Pay",
+      "a_type": "PRODUCT",
+      "a_source": "07_say-hello-to-macbook-neo.pdf",
+      "b_surface": "Apple Pay",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "merge",
+      "cluster": "apple_pay"
+    },
+    {
+      "a_surface": "Apple Pay",
+      "a_type": "PRODUCT",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "Apple Pay",
+      "b_type": "PRODUCT",
+      "b_source": "10_apple-introduces-the-new-macbook-air-with-m5.docx",
+      "label": "merge",
+      "cluster": "apple_pay"
+    },
+    {
+      "a_surface": "Apple Music",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple Music",
+      "b_type": "PRODUCT",
+      "b_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "label": "merge",
+      "cluster": "apple_music"
+    },
+    {
+      "a_surface": "Apple Music",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple Music",
+      "b_type": "PRODUCT",
+      "b_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "label": "merge",
+      "cluster": "apple_music"
+    },
+    {
+      "a_surface": "Apple Music",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple Music",
+      "b_type": "PRODUCT",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "apple_music"
+    },
+    {
+      "a_surface": "Apple Music",
+      "a_type": "PRODUCT",
+      "a_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "b_surface": "Apple Music",
+      "b_type": "PRODUCT",
+      "b_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "label": "merge",
+      "cluster": "apple_music"
+    },
+    {
+      "a_surface": "Apple Music",
+      "a_type": "PRODUCT",
+      "a_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "b_surface": "Apple Music",
+      "b_type": "PRODUCT",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "merge",
+      "cluster": "apple_music"
+    },
+    {
+      "a_surface": "Apple Music",
+      "a_type": "PRODUCT",
+      "a_source": "03_apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute.pdf",
+      "b_surface": "Apple Music",
+      "b_type": "PRODUCT",
+      "b_source": "07_say-hello-to-macbook-neo.pdf",
+      "label": "merge",
+      "cluster": "apple_music"
+    },
+    {
+      "a_surface": "Apple Music",
+      "a_type": "PRODUCT",
+      "a_source": "04_apple-opens-advanced-manufacturing-center-in-houston.txt",
+      "b_surface": "Apple Music",
+      "b_type": "PRODUCT",
+      "b_source": "05_apple-to-increase-spend-with-broadcom-to-produce-billions-more-us-chips.md",
+      "label": "merge",
+      "cluster": "apple_music"
+    },
+    {
+      "a_surface": "Apple Music",
+      "a_type": "PRODUCT",
+      "a_source": "04_apple-opens-advanced-manufacturing-center-in-houston.txt",
+      "b_surface": "Apple Music",
+      "b_type": "PRODUCT",
+      "b_source": "10_apple-introduces-the-new-macbook-air-with-m5.docx",
+      "label": "merge",
+      "cluster": "apple_music"
+    },
+    {
+      "a_surface": "Apple Music",
+      "a_type": "PRODUCT",
+      "a_source": "05_apple-to-increase-spend-with-broadcom-to-produce-billions-more-us-chips.md",
+      "b_surface": "Apple Music",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "merge",
+      "cluster": "apple_music"
+    },
+    {
+      "a_surface": "Apple Music",
+      "a_type": "PRODUCT",
+      "a_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "b_surface": "Apple Music",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "merge",
+      "cluster": "apple_music"
+    },
+    {
+      "a_surface": "Apple Music",
+      "a_type": "PRODUCT",
+      "a_source": "07_say-hello-to-macbook-neo.pdf",
+      "b_surface": "Apple Music",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "merge",
+      "cluster": "apple_music"
+    },
+    {
+      "a_surface": "Apple Music",
+      "a_type": "PRODUCT",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "Apple Music",
+      "b_type": "PRODUCT",
+      "b_source": "10_apple-introduces-the-new-macbook-air-with-m5.docx",
+      "label": "merge",
+      "cluster": "apple_music"
+    },
+    {
+      "a_surface": "Apple Maps",
+      "a_type": "PRODUCT",
+      "a_source": "11_Apple_Inc..txt",
+      "b_surface": "Apple Maps",
+      "b_type": "PRODUCT",
+      "b_source": "12_Tim_Cook.txt",
+      "label": "merge",
+      "cluster": "apple_maps"
+    },
+    {
+      "a_surface": "Apple Silicon",
+      "a_type": "PRODUCT",
+      "a_source": "07_say-hello-to-macbook-neo.pdf",
+      "b_surface": "Apple Silicon",
+      "b_type": "PRODUCT",
+      "b_source": "09_apple-debuts-m5-pro-and-m5-max-to-supercharge-the-most-demanding-pro-workflows.md",
+      "label": "merge",
+      "cluster": "apple_silicon"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple Intelligence",
+      "b_type": "PRODUCT",
+      "b_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "label": "reject",
+      "cluster": "apple_company__vs__apple_intelligence"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "Apple Intelligence",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "reject",
+      "cluster": "apple_company__vs__apple_intelligence"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple Store",
+      "b_type": "PRODUCT",
+      "b_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "label": "reject",
+      "cluster": "apple_company__vs__apple_store"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "Apple Store",
+      "b_type": "PRODUCT",
+      "b_source": "07_say-hello-to-macbook-neo.pdf",
+      "label": "reject",
+      "cluster": "apple_company__vs__apple_store"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple Watch",
+      "b_type": "PRODUCT",
+      "b_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "label": "reject",
+      "cluster": "apple_company__vs__apple_watch"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "Apple Watch",
+      "b_type": "PRODUCT",
+      "b_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "label": "reject",
+      "cluster": "apple_company__vs__apple_watch"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple TV",
+      "b_type": "PRODUCT",
+      "b_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "label": "reject",
+      "cluster": "apple_company__vs__apple_tv"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "Apple TV",
+      "b_type": "PRODUCT",
+      "b_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "label": "reject",
+      "cluster": "apple_company__vs__apple_tv"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple Card",
+      "b_type": "PRODUCT",
+      "b_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "label": "reject",
+      "cluster": "apple_company__vs__apple_card"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "Apple Card",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "reject",
+      "cluster": "apple_company__vs__apple_card"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple Pay",
+      "b_type": "PRODUCT",
+      "b_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "label": "reject",
+      "cluster": "apple_company__vs__apple_pay"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "Apple Pay",
+      "b_type": "PRODUCT",
+      "b_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "label": "reject",
+      "cluster": "apple_company__vs__apple_pay"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple Music",
+      "b_type": "PRODUCT",
+      "b_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "label": "reject",
+      "cluster": "apple_company__vs__apple_music"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "Apple Music",
+      "b_type": "PRODUCT",
+      "b_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "label": "reject",
+      "cluster": "apple_company__vs__apple_music"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple Maps",
+      "b_type": "PRODUCT",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "reject",
+      "cluster": "apple_company__vs__apple_maps"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "Apple Maps",
+      "b_type": "PRODUCT",
+      "b_source": "12_Tim_Cook.txt",
+      "label": "reject",
+      "cluster": "apple_company__vs__apple_maps"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple Park",
+      "b_type": "LOCATION",
+      "b_source": "11_Apple_Inc..txt",
+      "label": "reject",
+      "cluster": "apple_company__vs__apple_park"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Apple Silicon",
+      "b_type": "PRODUCT",
+      "b_source": "07_say-hello-to-macbook-neo.pdf",
+      "label": "reject",
+      "cluster": "apple_company__vs__apple_silicon"
+    },
+    {
+      "a_surface": "Apple",
+      "a_type": "ORG",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "Apple Silicon",
+      "b_type": "PRODUCT",
+      "b_source": "09_apple-debuts-m5-pro-and-m5-max-to-supercharge-the-most-demanding-pro-workflows.md",
+      "label": "reject",
+      "cluster": "apple_company__vs__apple_silicon"
+    },
+    {
+      "a_surface": "M5",
+      "a_type": "PRODUCT",
+      "a_source": "03_apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute.pdf",
+      "b_surface": "M5 Pro",
+      "b_type": "PRODUCT",
+      "b_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "label": "reject",
+      "cluster": "m5__vs__m5_pro"
+    },
+    {
+      "a_surface": "M5",
+      "a_type": "PRODUCT",
+      "a_source": "09_apple-debuts-m5-pro-and-m5-max-to-supercharge-the-most-demanding-pro-workflows.md",
+      "b_surface": "M5 Pro",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "reject",
+      "cluster": "m5__vs__m5_pro"
+    },
+    {
+      "a_surface": "M5",
+      "a_type": "PRODUCT",
+      "a_source": "03_apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute.pdf",
+      "b_surface": "M5 Max",
+      "b_type": "PRODUCT",
+      "b_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "label": "reject",
+      "cluster": "m5__vs__m5_max"
+    },
+    {
+      "a_surface": "M5",
+      "a_type": "PRODUCT",
+      "a_source": "09_apple-debuts-m5-pro-and-m5-max-to-supercharge-the-most-demanding-pro-workflows.md",
+      "b_surface": "M5 Max",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "reject",
+      "cluster": "m5__vs__m5_max"
+    },
+    {
+      "a_surface": "M5",
+      "a_type": "PRODUCT",
+      "a_source": "03_apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute.pdf",
+      "b_surface": "M5 Ultra",
+      "b_type": "PRODUCT",
+      "b_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "label": "reject",
+      "cluster": "m5__vs__m5_ultra"
+    },
+    {
+      "a_surface": "M5",
+      "a_type": "PRODUCT",
+      "a_source": "09_apple-debuts-m5-pro-and-m5-max-to-supercharge-the-most-demanding-pro-workflows.md",
+      "b_surface": "M5 Ultra",
+      "b_type": "PRODUCT",
+      "b_source": "03_apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute.pdf",
+      "label": "reject",
+      "cluster": "m5__vs__m5_ultra"
+    },
+    {
+      "a_surface": "M5",
+      "a_type": "PRODUCT",
+      "a_source": "03_apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute.pdf",
+      "b_surface": "M6",
+      "b_type": "PRODUCT",
+      "b_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "label": "reject",
+      "cluster": "m5__vs__m6"
+    },
+    {
+      "a_surface": "M5",
+      "a_type": "PRODUCT",
+      "a_source": "09_apple-debuts-m5-pro-and-m5-max-to-supercharge-the-most-demanding-pro-workflows.md",
+      "b_surface": "M6",
+      "b_type": "PRODUCT",
+      "b_source": "03_apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute.pdf",
+      "label": "reject",
+      "cluster": "m5__vs__m6"
+    },
+    {
+      "a_surface": "M5 Pro",
+      "a_type": "PRODUCT",
+      "a_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "b_surface": "M5 Max",
+      "b_type": "PRODUCT",
+      "b_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "label": "reject",
+      "cluster": "m5_pro__vs__m5_max"
+    },
+    {
+      "a_surface": "M5 Pro",
+      "a_type": "PRODUCT",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "M5 Max",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "reject",
+      "cluster": "m5_pro__vs__m5_max"
+    },
+    {
+      "a_surface": "M5 Pro",
+      "a_type": "PRODUCT",
+      "a_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "b_surface": "M5 Ultra",
+      "b_type": "PRODUCT",
+      "b_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "label": "reject",
+      "cluster": "m5_pro__vs__m5_ultra"
+    },
+    {
+      "a_surface": "M5 Pro",
+      "a_type": "PRODUCT",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "M5 Ultra",
+      "b_type": "PRODUCT",
+      "b_source": "03_apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute.pdf",
+      "label": "reject",
+      "cluster": "m5_pro__vs__m5_ultra"
+    },
+    {
+      "a_surface": "M5 Pro",
+      "a_type": "PRODUCT",
+      "a_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "b_surface": "M6",
+      "b_type": "PRODUCT",
+      "b_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "label": "reject",
+      "cluster": "m5_pro__vs__m6"
+    },
+    {
+      "a_surface": "M5 Pro",
+      "a_type": "PRODUCT",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "M6",
+      "b_type": "PRODUCT",
+      "b_source": "03_apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute.pdf",
+      "label": "reject",
+      "cluster": "m5_pro__vs__m6"
+    },
+    {
+      "a_surface": "M5 Max",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "M5 Ultra",
+      "b_type": "PRODUCT",
+      "b_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "label": "reject",
+      "cluster": "m5_max__vs__m5_ultra"
+    },
+    {
+      "a_surface": "M5 Max",
+      "a_type": "PRODUCT",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "M5 Ultra",
+      "b_type": "PRODUCT",
+      "b_source": "03_apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute.pdf",
+      "label": "reject",
+      "cluster": "m5_max__vs__m5_ultra"
+    },
+    {
+      "a_surface": "M5 Max",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "M6",
+      "b_type": "PRODUCT",
+      "b_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "label": "reject",
+      "cluster": "m5_max__vs__m6"
+    },
+    {
+      "a_surface": "M5 Max",
+      "a_type": "PRODUCT",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "M6",
+      "b_type": "PRODUCT",
+      "b_source": "03_apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute.pdf",
+      "label": "reject",
+      "cluster": "m5_max__vs__m6"
+    },
+    {
+      "a_surface": "M5 Ultra",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "M6",
+      "b_type": "PRODUCT",
+      "b_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "label": "reject",
+      "cluster": "m5_ultra__vs__m6"
+    },
+    {
+      "a_surface": "M5 Ultra",
+      "a_type": "PRODUCT",
+      "a_source": "03_apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute.pdf",
+      "b_surface": "M6",
+      "b_type": "PRODUCT",
+      "b_source": "03_apple-introduces-m6-and-m5-ultra-for-a-big-leap-in-performance-and-ai-compute.pdf",
+      "label": "reject",
+      "cluster": "m5_ultra__vs__m6"
+    },
+    {
+      "a_surface": "MacBook Air",
+      "a_type": "PRODUCT",
+      "a_source": "10_apple-introduces-the-new-macbook-air-with-m5.docx",
+      "b_surface": "MacBook Pro",
+      "b_type": "PRODUCT",
+      "b_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "label": "reject",
+      "cluster": "macbook_air__vs__macbook_pro"
+    },
+    {
+      "a_surface": "MacBook Air",
+      "a_type": "PRODUCT",
+      "a_source": "10_apple-introduces-the-new-macbook-air-with-m5.docx",
+      "b_surface": "MacBook Neo",
+      "b_type": "PRODUCT",
+      "b_source": "07_say-hello-to-macbook-neo.pdf",
+      "label": "reject",
+      "cluster": "macbook_air__vs__macbook_neo"
+    },
+    {
+      "a_surface": "MacBook Air",
+      "a_type": "PRODUCT",
+      "a_source": "10_apple-introduces-the-new-macbook-air-with-m5.docx",
+      "b_surface": "Mac Studio",
+      "b_type": "PRODUCT",
+      "b_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "label": "reject",
+      "cluster": "macbook_air__vs__mac_studio"
+    },
+    {
+      "a_surface": "MacBook Air",
+      "a_type": "PRODUCT",
+      "a_source": "10_apple-introduces-the-new-macbook-air-with-m5.docx",
+      "b_surface": "Mac mini",
+      "b_type": "PRODUCT",
+      "b_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "label": "reject",
+      "cluster": "macbook_air__vs__mac_mini"
+    },
+    {
+      "a_surface": "MacBook Pro",
+      "a_type": "PRODUCT",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "MacBook Neo",
+      "b_type": "PRODUCT",
+      "b_source": "07_say-hello-to-macbook-neo.pdf",
+      "label": "reject",
+      "cluster": "macbook_pro__vs__macbook_neo"
+    },
+    {
+      "a_surface": "MacBook Pro",
+      "a_type": "PRODUCT",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "Mac Studio",
+      "b_type": "PRODUCT",
+      "b_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "label": "reject",
+      "cluster": "macbook_pro__vs__mac_studio"
+    },
+    {
+      "a_surface": "MacBook Pro",
+      "a_type": "PRODUCT",
+      "a_source": "08_apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max.txt",
+      "b_surface": "Mac mini",
+      "b_type": "PRODUCT",
+      "b_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "label": "reject",
+      "cluster": "macbook_pro__vs__mac_mini"
+    },
+    {
+      "a_surface": "MacBook Neo",
+      "a_type": "PRODUCT",
+      "a_source": "07_say-hello-to-macbook-neo.pdf",
+      "b_surface": "Mac Studio",
+      "b_type": "PRODUCT",
+      "b_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "label": "reject",
+      "cluster": "macbook_neo__vs__mac_studio"
+    },
+    {
+      "a_surface": "MacBook Neo",
+      "a_type": "PRODUCT",
+      "a_source": "07_say-hello-to-macbook-neo.pdf",
+      "b_surface": "Mac mini",
+      "b_type": "PRODUCT",
+      "b_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "label": "reject",
+      "cluster": "macbook_neo__vs__mac_mini"
+    },
+    {
+      "a_surface": "Mac Studio",
+      "a_type": "PRODUCT",
+      "a_source": "01_apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra.md",
+      "b_surface": "Mac mini",
+      "b_type": "PRODUCT",
+      "b_source": "02_apple-unveils-a-more-powerful-mac-mini-featuring-the-all-new-m6-and-m5-pro.docx",
+      "label": "reject",
+      "cluster": "mac_studio__vs__mac_mini"
+    },
+    {
+      "a_surface": "Tim Cook",
+      "a_type": "PERSON",
+      "a_source": "04_apple-opens-advanced-manufacturing-center-in-houston.txt",
+      "b_surface": "John Ternus",
+      "b_type": "PERSON",
+      "b_source": "06_tim-cook-to-become-apple-executive-chairman-john-ternus-to-become-apple-ceo.docx",
+      "label": "reject",
+      "cluster": "tim_cook__vs__john_ternus"
+    },
+    {
+      "a_surface": "Tim Cook",
+      "a_type": "PERSON",
+      "a_source": "11_Apple_Inc..txt",
+      "b_surface": "John Ternus",
+      "b_type": "PERSON",
+      "b_source": "10_apple-introduces-the-new-macbook-air-with-m5.docx",
+      "label": "reject",
+      "cluster": "tim_cook__vs__john_ternus"
+    }
+  ]
+}

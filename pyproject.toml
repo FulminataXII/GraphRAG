@@ -68,6 +68,7 @@ dev = [
     "pytest-cov==7.1.0",
     "hypothesis==6.165.10",
     "types-pyyaml",
+    "types-networkx",
 ]
 
 [project.scripts]

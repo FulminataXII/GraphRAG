@@ -7,6 +7,8 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel
 
+from graphrag.core.models import Mention
+
 SCHEMA_VERSION: Final[int] = 1
 
 
@@ -36,6 +38,25 @@ class IngestDocumentPayload(BaseModel):
 class ExtractEntitiesPayload(BaseModel):
     doc_id: str
     chunk_ids: list[UUID]
+
+
+class ResolveEntitiesPayload(BaseModel):
+    """Carries `extract_entities`' output to `resolve_entities`.
+
+    SPEC GAP (BO-07): BLUEPRINT §1a's Type Index lists exactly four payloads for this module,
+    with none for `resolve_entities` — yet BLUEPRINT §7.2 requires `resolve_entities` to be its
+    OWN registered arq function, separate from `extract_entities` (ARCHITECTURE §1.3's sequence
+    diagram instead folds extraction and resolution into one worker step with no queue hop
+    between them; BLUEPRINT wins on this disagreement per its own precedence rule, and the
+    disagreement is reported here rather than silently picking a side). Something has to carry
+    `extract_entities`' output across that queue hop; this reuses the already-Type-Indexed
+    `Mention` (core/models.py) rather than inventing a new domain concept. Relations are not
+    carried here: `GraphStore.upsert_relations` (the only sink for them) doesn't exist until
+    BO-08, so `resolve_entities` in this BO has nothing to do with them yet.
+    """
+
+    doc_id: str
+    mentions: list[Mention]
 
 
 class ProjectPayloadPayload(BaseModel):
