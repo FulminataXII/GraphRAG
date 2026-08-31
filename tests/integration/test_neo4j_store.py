@@ -29,7 +29,7 @@ from graphrag.core.models import Chunk, DocumentStatus, EntityType, Mention, Sou
 from graphrag.services.ingestion.chunker import chunk_document
 from graphrag.services.ingestion.parser import DocumentParser
 from graphrag.services.orchestration.schemas import EntityExtraction, MentionOut, RelationOut
-from tests.factories import make_entity, make_metrics, make_relation
+from tests.factories import make_entity, make_mention, make_metrics, make_relation
 from tests.fakes import (
     FakeCache,
     FakeDocumentLedger,
@@ -496,6 +496,24 @@ async def test_traverse_populates_cypher_templates(graph_store: Neo4jGraphStore)
             )
         ]
     )
+    await graph_store.upsert_mentions(
+        [
+            make_mention(
+                surface="Template A",
+                type=entity_a.type,
+                chunk_id=shared_chunk_id,
+                entity_id=entity_a.canonical_id,
+            ),
+            make_mention(
+                surface="Template B",
+                type=entity_b.type,
+                chunk_id=shared_chunk_id,
+                char_start=11,
+                char_end=22,
+                entity_id=entity_b.canonical_id,
+            ),
+        ]
+    )
 
     results = {}
     results["neighbors"] = await graph_store.traverse(
@@ -510,7 +528,7 @@ async def test_traverse_populates_cypher_templates(graph_store: Neo4jGraphStore)
         "entities_by_relation", {"relation_type": "WORKS_WITH"}, timeout_ms=3000
     )
     results["co_mentioned"] = await graph_store.traverse(
-        "co_mentioned", {"chunk_id": str(shared_chunk_id)}, timeout_ms=3000
+        "co_mentioned", {"entity": str(entity_a.canonical_id), "k": 10}, timeout_ms=3000
     )
     results["top_entities_for_chunks"] = await graph_store.traverse(
         "top_entities_for_chunks", {"chunk_ids": [str(shared_chunk_id)]}, timeout_ms=3000
@@ -518,6 +536,60 @@ async def test_traverse_populates_cypher_templates(graph_store: Neo4jGraphStore)
 
     for name, paths in results.items():
         assert paths, f"{name} returned no paths against a graph that should satisfy it"
+
+
+async def test_co_mentioned_returns_results(graph_store: Neo4jGraphStore) -> None:
+    """BO-09 gate. `co_mentioned` must key on MENTIONS, not `RELATES.chunk_id` (BLUEPRINT §5.3
+    cleanup fix) -- two entities that share a mentioning chunk but have NO RELATES edge between
+    them must still show up for each other, which a RELATES-keyed template could never surface.
+    """
+    seed = make_entity(name="Co-mentioned Seed", canonical_id=uuid4())
+    other = make_entity(name="Co-mentioned Other", canonical_id=uuid4())
+    unrelated = make_entity(name="Co-mentioned Unrelated", canonical_id=uuid4())
+    await graph_store.upsert_entities([seed, other, unrelated])
+
+    shared_chunk_id = uuid4()
+    await graph_store.upsert_mentions(
+        [
+            make_mention(
+                surface="Co-mentioned Seed",
+                type=seed.type,
+                chunk_id=shared_chunk_id,
+                entity_id=seed.canonical_id,
+            ),
+            make_mention(
+                surface="Co-mentioned Other",
+                type=other.type,
+                chunk_id=shared_chunk_id,
+                char_start=18,
+                char_end=36,
+                entity_id=other.canonical_id,
+            ),
+        ]
+    )
+    # `unrelated` is mentioned in a DIFFERENT chunk -- must never show up as co-mentioned with seed.
+    await graph_store.upsert_mentions(
+        [
+            make_mention(
+                surface="Co-mentioned Unrelated",
+                type=unrelated.type,
+                chunk_id=uuid4(),
+                entity_id=unrelated.canonical_id,
+            )
+        ]
+    )
+
+    paths = await graph_store.traverse(
+        "co_mentioned", {"entity": str(seed.canonical_id), "k": 10}, timeout_ms=3000
+    )
+
+    co_mentioned_ids = {node.canonical_id for path in paths for node in path.nodes}
+    assert other.canonical_id in co_mentioned_ids, (
+        "entities sharing a mentioning chunk with the seed -- with NO RELATES edge between "
+        "them -- must be returned by co_mentioned"
+    )
+    assert unrelated.canonical_id not in co_mentioned_ids
+    assert seed.canonical_id not in co_mentioned_ids  # never co-mentioned with itself
 
 
 async def test_neighbors_respects_max_hops(

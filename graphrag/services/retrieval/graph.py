@@ -7,13 +7,10 @@ Template selection (BLUEPRINT-patched `RoutePlan.template`/`RoutePlan.relation_t
       canonical entity, as `entity_id`. (`top_entities_for_chunks` itself needs `chunk_ids`,
       which nothing in `RoutePlan` supplies, so it always falls back to `neighbors`.)
     - `path_between` uses `seed_entities[0]` and `seed_entities[1]` as `src_id`/`dst_id`.
-    - `co_mentioned` uses `seed_entities[0]` as `chunk_id` — REPORTED MISMATCH: the Cypher
-      template filters `RELATES.chunk_id = $chunk_id`, a chunk identifier, but the only value
-      `RoutePlan` can supply here is a linked ENTITY's `canonical_id`. Wired exactly as
-      directed; it will not raise, but in practice `co_mentioned` will always return zero rows
-      through this path, since an entity id will not collide with a real chunk_id. Flagged for
-      the BLUEPRINT to resolve (`RoutePlan` would need an actual chunk_id field), not silently
-      "fixed" by inventing one here.
+    - `co_mentioned` uses `seed_entities[0]`, linked to its canonical entity, as `entity`
+      (BLUEPRINT §5.3 cleanup fix: the Cypher template now traverses
+      `(:Entity)<-[:MENTIONS]-(:Chunk)-[:MENTIONS]->(:Entity)`, keyed on an entity canonical_id
+      — exactly what `RoutePlan.seed_entities` can supply, no chunk_id needed).
     - Whenever the requested template's parameters can't be built from `plan` (missing/short
       `seed_entities`, missing `relation_type`, or an unknown `template` string), retrieval
       falls back to `neighbors` with `seed_entities[0]`. If even that can't link, `retrieve()`
@@ -118,8 +115,10 @@ class GraphRetriever:
             return {"src_id": str(first), "dst_id": str(second)}
 
         if template == "co_mentioned":
-            # See module docstring's REPORTED MISMATCH -- chunk_id here is really an entity id.
-            return {"chunk_id": str(first)}
+            # JUDGMENT CALL -- `k` (BLUEPRINT §5.3 "co_mentioned(entity, k)") has no dedicated
+            # config leaf; reused self._max_paths, the same "how many results" bound every other
+            # template is truncated to post-traversal.
+            return {"entity": str(first), "k": self._max_paths}
 
         # "neighbors" (and the universal fallback target).
         return {"entity_id": str(first)}

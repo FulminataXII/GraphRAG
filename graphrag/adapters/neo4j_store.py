@@ -22,9 +22,11 @@ instead of duplicated onto every edge. Reported alongside the rest of this BO's 
 (ARCHITECTURE §6.3), keeping an entity reachable from its source chunk when it participates in
 zero `RELATES` edges. Like `upsert_relations`, it rejects (raises `ValidationError`) any mention
 missing required linkage — here `chunk_id` or `entity_id` — before touching the database.
-`co_mentioned` and `top_entities_for_chunks` still traverse over `RELATES.chunk_id` only; BO-09's
-directive was to add the write path and wire it from the resolve task, not to rewire the
-existing read-side templates onto MENTIONS — reported here, not done silently.
+`co_mentioned` traverses this MENTIONS edge (BLUEPRINT §5.3, BO-09 cleanup fix — BO-08 shipped it
+filtering on `RELATES.chunk_id` instead, which nothing upstream can ever populate since
+`GraphRetriever` only ever has an entity `canonical_id`, never a chunk_id). `top_entities_for_chunks`
+still traverses `RELATES.chunk_id`; it stays registered but unreachable via `plan.template` today
+(no `RoutePlan` field supplies `chunk_ids`), per BLUEPRINT §5.3 — not a bug to fix here.
 
 JUDGMENT CALL — `Entity.aliases` on `traverse()` results: the domain model requires
 `aliases: list[str]`, but the graph stores aliases only as incoming `ALIAS_OF` edges, not a node
@@ -125,11 +127,24 @@ CYPHER_TEMPLATES: Final[dict[str, str]] = {
         LIMIT $max_paths
     """,
     "co_mentioned": """
-        MATCH (a:Entity)-[r:RELATES {chunk_id: $chunk_id}]-(b:Entity)
-        WHERE a.canonical_id < b.canonical_id
-        RETURN a, r, b
-        ORDER BY r.confidence DESC
-        LIMIT $max_paths
+        MATCH (seed:Entity {canonical_id: $entity})
+        CALL (seed) {
+          MATCH (seed)<-[m1:MENTIONS]-(c:Chunk)
+          RETURN c, m1
+          ORDER BY m1.confidence DESC
+          LIMIT $per_hop_cap
+        }
+        WITH seed, c
+        CALL (seed, c) {
+          MATCH (c)-[m2:MENTIONS]->(b:Entity)
+          WHERE b.canonical_id <> seed.canonical_id
+          RETURN b, m2
+          ORDER BY m2.confidence DESC
+          LIMIT $per_hop_cap
+        }
+        RETURN DISTINCT b, c.chunk_id AS chunk_id, m2.confidence AS confidence
+        ORDER BY confidence DESC
+        LIMIT $k
     """,
     "top_entities_for_chunks": """
         UNWIND $chunk_ids AS cid
@@ -468,7 +483,22 @@ class Neo4jGraphStore:
         if template == "entities_by_relation":
             return [self._one_hop_path(record["s"], record["r"], record["d"]) for record in records]
         if template == "co_mentioned":
-            return [self._one_hop_path(record["a"], record["r"], record["b"]) for record in records]
+            # No RELATES edge here (MENTIONS-only co-occurrence), so there is no Relation to
+            # build -- a zero-hop path per shared-chunk entity, same shape as
+            # top_entities_for_chunks below. score = the MENTIONS-confidence the ORDER BY already
+            # ranked by, since (as with GraphPath.score generally, see module docstring) neither
+            # BLUEPRINT nor ARCHITECTURE assigns this value a meaning beyond "comparable within
+            # one template's own results."
+            return [
+                GraphPath(
+                    nodes=[_entity_from_node(record["b"])],
+                    relations=[],
+                    chunk_ids=[UUID(record["chunk_id"])],
+                    hops=0,
+                    score=float(record["confidence"]),
+                )
+                for record in records
+            ]
         # top_entities_for_chunks: no traversal, one degenerate zero-hop path per ranked entity.
         # score is the ranking degree itself -- there is no relation to average a confidence
         # from, and `degree` is already what the template's own ORDER BY ranks candidates by.
