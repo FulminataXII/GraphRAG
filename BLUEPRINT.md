@@ -171,7 +171,13 @@ gap: stop and report it rather than inventing one. Types are declared in exactly
 
 ### `core/events.py` — BO-01
 `JobEnvelope[P]` · `IngestDocumentPayload` · `ExtractEntitiesPayload` · `ProjectPayloadPayload` ·
-`DeleteDocumentPayload` · `ResolveEntitiesPayload` (BO-07)
+`DeleteDocumentPayload` · `ResolveEntitiesPayload` (BO-07) · `UnresolvedRelation` (BO-08)
+
+`UnresolvedRelation` carries the extractor's relation output across the
+`extract_entities` → `resolve_entities` queue hop. It exists because `RelationOut` lives in
+`services/orchestration/schemas.py` and `core/` may not import `services/` — it is a
+layering-legal twin of that shape, not a second business concept. Keep the two in sync by hand;
+if they drift, the queue hop silently drops fields.
 
 ### `config/schema.py` — BO-00
 All `*Section` models, plus the nested spec models they contain: `RateLimitSpec`,
@@ -556,6 +562,15 @@ class Relation(BaseModel):
 class GraphPath(BaseModel):
     nodes: list[Entity]; relations: list[Relation]
     chunk_ids: list[UUID]; hops: int; score: float
+    chunks: list[Chunk] = Field(default_factory=list)  # Carries hydrated text to fuse
+    # score: mean confidence of the path's relations. For a zero-hop path (no relation to
+    # average, e.g. top_entities_for_chunks) it is that template's own ranking value — the
+    # entity's degree. Pinned BO-08; was previously undocumented, and an adapter cannot
+    # construct a GraphPath without it. Comparable WITHIN one template's results, not across
+    # templates — fuse() must not assume a shared scale.
+    # nodes[*].aliases is [] on traverse() results. Aliases live only as ALIAS_OF edges, and
+    # reading them back would cost a subquery per node on every template. upsert_entities
+    # still stores the real Entity.aliases, so nothing is lost — only not re-read here.
 
 class Citation(BaseModel):
     chunk_id: UUID; doc_id: str; uri: str; quote: str | None
@@ -582,6 +597,7 @@ class NodeFailure(BaseModel):
 
 class RoutePlan(BaseModel):
     strategy: Literal["vector", "graph", "hybrid"]
+    template: str = Field(default="neighbors")
     seed_entities: list[str]; hops: int
     sub_queries: list[str]; rationale: str
 
@@ -731,6 +747,15 @@ class GraphStore(Protocol):
     async def upsert_entities(self, entities: Sequence[Entity]) -> None: ...
     async def upsert_relations(self, relations: Sequence[Relation]) -> None:
         """Rejects any relation with a null chunk_id or doc_id."""
+    async def upsert_mentions(self, mentions: Sequence[Mention]) -> None:
+        """Write (:Chunk)-[:MENTIONS {surface, confidence, char_start, char_end}]->(:Entity).
+
+        Added BO-09. BO-08 shipped without it: co_mentioned and top_entities_for_chunks were
+        implemented over RELATES.chunk_id alone, which only sees entities that participate in
+        a relation. An entity the extractor found but linked to nothing is invisible to both
+        templates — and entity linking in BO-09 needs exactly those. Rejects a mention whose
+        chunk_id or entity_id is null.
+        """
     async def add_alias(self, alias_id: UUID, canonical_id: UUID,
                         score: float, method: str) -> None: ...
     async def traverse(self, template: str, params: dict[str, Any],
@@ -1158,6 +1183,13 @@ Every template:
   - returns chunk_id and doc_id for every traversed relationship.
 
 Templates: neighbors, path_between, entities_by_relation, co_mentioned, top_entities_for_chunks
+
+⚠️ `neighbors` hard-codes a 2-hop unroll matching retrieval.graph.max_hops. Cypher's per-hop
+ORDER BY/LIMIT idiom has no dynamic-hop-count equivalent, and CYPHER_TEMPLATES is Final. So the
+template text and the config value are coupled with nothing enforcing it. Neo4jStore.__init__
+MUST raise ValidationError when retrieval.graph.max_hops != the value the template was written
+for. A silently-ignored config change is worse than a startup failure: max_hops=3 would appear
+configured and still return 2-hop results.
 """
 
 class Neo4jGraphStore:
@@ -1172,6 +1204,9 @@ class Neo4jGraphStore:
         - upsert_chunks stores the FULL Chunk.text.
         - traverse(template, params) looks template up in CYPHER_TEMPLATES by key and raises
           ValidationError on an unknown key. It never accepts raw Cypher.
+        - per_hop_cap and max_paths are ALWAYS injected by the adapter from retrieval.graph,
+          overriding any same-named key the caller passed. These are safety bounds; a caller
+          must not be able to widen them.
         - Library exceptions wrap to GraphBackendUnavailable.
     """
     def __init__(self, driver: AsyncDriver, settings: Settings) -> None: ...
@@ -1247,7 +1282,7 @@ class PostgresEvalStore:
 
 > **Breaker wraps retry, never the reverse.** Every adapter that talks to a backend composes them
 > in one order: `circuit_breaker(retry(call))`. One logical operation then registers as **one**
-> failure with the breaker after its retries are exhausted. Inverted, three retries of a dead
+> failure with the breaker after its retries are exhausted. Inverted, three retries against a dead
 > backend look like three failures, `fail_max: 5` trips after two requests instead of five, and
 > the breaker opens on transient noise. Retries use exponential backoff **with full jitter** —
 > without jitter, every client that backed off together retries together and re-floors the
@@ -1574,11 +1609,12 @@ class VectorRetriever:
 class GraphRetriever:
     """Contract of retrieve(plan, max_hops) -> list[GraphPath]:
         - Links plan.seed_entities; returns [] if none link.
-        - Selects a template by plan.strategy and passes typed params including
+        - Selects a template by plan.template and passes typed params including
           per_hop_cap = retrieval.graph.max_degree_per_hop.
         - Truncates to retrieval.graph.max_paths, ranked by path score.
         - Hydrates chunk text via retrieval.graph.hydrate_from ('neo4j' by default, which is
           what makes the vector-outage fallback real).
+        - Attaches hydrated chunks directly to the returned GraphPath objects (chunks field).
     """
 
 # fusion.py
@@ -1681,6 +1717,7 @@ class CitationOut(BaseModel):
 
 class RoutePlanOut(BaseModel):
     strategy: Literal["vector", "graph", "hybrid"]
+    template: str = Field(default="neighbors", description="Cypher template to use: neighbors, path_between, entities_by_relation, co_mentioned, top_entities_for_chunks")
     seed_entities: list[str] = Field(default_factory=list, max_length=8,
         description="Entity names mentioned in the question; empty for non-entity queries")
     hops: int = Field(ge=1, le=3)
