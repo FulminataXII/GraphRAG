@@ -549,6 +549,7 @@ class ScoredChunk(BaseModel):
 class Mention(BaseModel):
     surface: str; type: EntityType
     chunk_id: UUID; char_start: int; char_end: int; confidence: float
+    entity_id: UUID | None = None
 
 class Entity(BaseModel):
     canonical_id: UUID; name: str; name_normalized: str
@@ -599,6 +600,7 @@ class RoutePlan(BaseModel):
     strategy: Literal["vector", "graph", "hybrid"]
     template: str = Field(default="neighbors")
     seed_entities: list[str]; hops: int
+    relation_type: str | None = None
     sub_queries: list[str]; rationale: str
 
 class DocumentRecord(BaseModel):
@@ -1721,6 +1723,7 @@ class RoutePlanOut(BaseModel):
     seed_entities: list[str] = Field(default_factory=list, max_length=8,
         description="Entity names mentioned in the question; empty for non-entity queries")
     hops: int = Field(ge=1, le=3)
+    relation_type: str | None = Field(default=None, description="Only required for entities_by_relation template")
     sub_queries: list[str] = Field(default_factory=list, max_length=4)
     rationale: str = Field(max_length=400)
 
