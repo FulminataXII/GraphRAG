@@ -8,12 +8,21 @@ where BO-08's "Wire graph writes into IngestionService / resolve task" build ste
 resolve side. Mirrors the established pattern of guarding on `graph_store is not None` (e.g.
 `IngestionService`'s own graph writes) rather than assuming it is always configured.
 
-A relation's `src_surface`/`dst_surface` only becomes a `Relation.src_id`/`dst_id` here: it is
-looked up against a surface -> canonical_id map built from THIS batch's `ResolutionResult.
-entities` (their `name` and every `aliases` entry — the exact raw surface strings the cluster was
-built from, see `ResolutionService.resolve()`). A surface that doesn't resolve — the LLM
-hallucinated an endpoint, or the entity landed in a different batch — is dropped, the same way a
-hallucinated `chunk_id` is dropped in `extract_entities`, not treated as an error.
+As of BO-09 item 0, also calls `GraphStore.upsert_mentions` for every `env.payload.mentions`
+entry that resolves to a canonical entity — this is what keeps an entity reachable from its
+source chunk when it never participates in a relation (`extract_entities` emits mentions for
+every extracted entity, but relations only for entity PAIRS the LLM connected; a singleton
+mention has no relation to carry chunk_id/doc_id provenance through, so without this call it
+would be upserted to Qdrant's entities collection but never linked back to graph-side chunk
+text).
+
+Both a relation's `src_surface`/`dst_surface` and a mention's `surface` become a canonical
+`UUID` the same way: looked up against a surface -> canonical_id map built from THIS batch's
+`ResolutionResult.entities` (their `name` and every `aliases` entry — the exact raw surface
+strings the cluster was built from, see `ResolutionService.resolve()`). A surface that doesn't
+resolve — the LLM hallucinated an endpoint, or the entity landed in a different batch — is
+dropped, the same way a hallucinated `chunk_id` is dropped in `extract_entities`, not treated as
+an error.
 """
 
 from __future__ import annotations
@@ -25,7 +34,7 @@ from uuid import UUID
 from graphrag.apps.worker.tasks._common import run_task
 from graphrag.core.errors import AppError
 from graphrag.core.events import JobEnvelope, ResolveEntitiesPayload, UnresolvedRelation
-from graphrag.core.models import DocumentStatus, Entity, Relation
+from graphrag.core.models import DocumentStatus, Entity, Mention, Relation
 from graphrag.services.resolution.blocking import Blocker
 from graphrag.services.resolution.service import ResolutionService
 
@@ -64,6 +73,21 @@ def _resolve_relations(
     return relations
 
 
+def _link_mentions(
+    mentions: Sequence[Mention], surface_to_canonical: dict[str, UUID]
+) -> list[Mention]:
+    """Every mention that resolves gets its `entity_id` filled in via `model_copy` (`Mention` is
+    frozen) — `GraphStore.upsert_mentions` (BLUEPRINT §3.5) rejects a null `entity_id`, so an
+    unresolved mention must never reach it in the first place."""
+    linked: list[Mention] = []
+    for mention in mentions:
+        canonical_id = surface_to_canonical.get(mention.surface)
+        if canonical_id is None:
+            continue  # same drop-not-error handling as _resolve_relations
+        linked.append(mention.model_copy(update={"entity_id": canonical_id}))
+    return linked
+
+
 async def resolve_entities(ctx: dict[str, Any], env: JobEnvelope[ResolveEntitiesPayload]) -> None:
     """See `ingest_document`'s docstring for the contract shared by every task in this package."""
     container = ctx["container"]
@@ -99,8 +123,12 @@ async def resolve_entities(ctx: dict[str, Any], env: JobEnvelope[ResolveEntities
                 await container.graph_store.add_alias(
                     alias.alias_id, alias.canonical_id, alias.score, alias.method
                 )
+            surface_to_canonical = _surface_to_canonical(result.entities)
+            if env.payload.mentions:
+                linked_mentions = _link_mentions(env.payload.mentions, surface_to_canonical)
+                if linked_mentions:
+                    await container.graph_store.upsert_mentions(linked_mentions)
             if env.payload.relations:
-                surface_to_canonical = _surface_to_canonical(result.entities)
                 relations = _resolve_relations(
                     env.payload.relations, env.payload.doc_id, surface_to_canonical
                 )

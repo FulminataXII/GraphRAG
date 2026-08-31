@@ -11,7 +11,7 @@ from enum import StrEnum
 from typing import Literal
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 
 class DocumentStatus(StrEnum):
@@ -162,6 +162,12 @@ class ScoredChunk(BaseModel):
 
 
 class Mention(BaseModel):
+    """A raw extracted mention. `entity_id` is unset until resolution: extraction knows only the
+    surface text, resolution is what assigns a canonical entity. `GraphStore.upsert_mentions`
+    (BLUEPRINT §3.5) rejects any mention whose `entity_id` (or `chunk_id`) is null — so a
+    resolve-time mention list must go through `.model_copy(update={"entity_id": ...})` per
+    resolved mention before being upserted."""
+
     model_config = ConfigDict(frozen=True)
 
     surface: str
@@ -170,6 +176,7 @@ class Mention(BaseModel):
     char_start: int
     char_end: int
     confidence: float
+    entity_id: UUID | None = None
 
 
 class Entity(BaseModel):
@@ -205,6 +212,7 @@ class GraphPath(BaseModel):
     chunk_ids: list[UUID]
     hops: int
     score: float
+    chunks: list[Chunk] = Field(default_factory=list)  # Carries hydrated text to fuse
 
 
 class Citation(BaseModel):
@@ -272,8 +280,10 @@ class RoutePlan(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     strategy: Literal["vector", "graph", "hybrid"]
+    template: str = Field(default="neighbors")
     seed_entities: list[str]
     hops: int
+    relation_type: str | None = None
     sub_queries: list[str]
     rationale: str
 

@@ -356,6 +356,12 @@ Legend: `[C]` component · `[T]` test · `[G]` gate (must pass to proceed)
 ## BO-09 — Retrieval
 
 **Build:**
+0. `[C]` **Carried from BO-08:** implement `GraphStore.upsert_mentions` (BLUEPRINT §3.5) and call
+   it from the resolve task, so `(:Chunk)-[:MENTIONS]->(:Entity)` edges finally exist. BO-08
+   built `co_mentioned` and `top_entities_for_chunks` over `RELATES.chunk_id` alone, which only
+   sees entities that participate in a relation — an extracted entity linked to nothing is
+   invisible to both, and `EntityLinker` needs exactly those. Also add the `max_hops` /
+   `neighbors`-template coupling guard in `Neo4jGraphStore.__init__`.
 1. `[C]` `services/retrieval/linker.py` — `EntityLinker`
 2. `[C]` `services/retrieval/vector.py` — `VectorRetriever`
 3. `[C]` `services/retrieval/graph.py` — `GraphRetriever`
@@ -374,6 +380,20 @@ Legend: `[C]` component · `[T]` test · `[G]` gate (must pass to proceed)
 - `[T][G]` `[integration]` `test_graph_hydrates_from_neo4j` — no Qdrant call when `hydrate_from=neo4j`
 - `[T]` `[integration]` `test_hybrid_beats_singles_on_exact_id` — literal part number ranks higher under hybrid
 - `[T]` `test_vector_raises_backend_unavailable_on_failure` — caller decides to degrade
+- `[T][G]` `[integration]` `test_mentions_edges_exist` — after ingest → extract → resolve, assert
+  a non-zero `(:Chunk)-[:MENTIONS]->(:Entity)` count, and that an entity participating in **no**
+  relation is still reachable from its chunk. The second half is the point: a MENTIONS count that
+  only covers relation-bearing entities proves nothing BO-08 didn't already have.
+- `[T]` `test_max_hops_mismatch_raises` — set `retrieval.graph.max_hops` to a value the
+  `neighbors` template wasn't written for; `Neo4jGraphStore.__init__` must raise, not silently
+  return 2-hop results.
+- `[T][G]` `[integration]` `test_co_mentioned_returns_results` — **added at BO-09 cleanup.**
+  Seed two entities MENTIONed in the same real chunk; `traverse("co_mentioned", {"entity":
+  <canonical_id>, "k": ...})` must return a non-empty result containing the other entity. BO-08's
+  version filtered on `RELATES.chunk_id` and would have passed `test_traverse_rejects_unknown_template`
+  while silently returning zero rows for every real call — this is the gate that would have caught
+  it. A test asserting only "does not raise" does not satisfy this line; assert the entity is
+  actually present in the returned paths.
 
 ---
 

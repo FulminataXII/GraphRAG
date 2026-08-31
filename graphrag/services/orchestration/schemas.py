@@ -58,12 +58,20 @@ class CitationOut(BaseModel):
 
 class RoutePlanOut(BaseModel):
     strategy: Literal["vector", "graph", "hybrid"]
+    template: str = Field(
+        default="neighbors",
+        description="Cypher template to use: neighbors, path_between, entities_by_relation, "
+        "co_mentioned, top_entities_for_chunks",
+    )
     seed_entities: list[str] = Field(
         default_factory=list,
         max_length=8,
         description="Entity names mentioned in the question; empty for non-entity queries",
     )
     hops: int = Field(ge=1, le=3)
+    relation_type: str | None = Field(
+        default=None, description="Only required for entities_by_relation template"
+    )
     sub_queries: list[str] = Field(default_factory=list, max_length=4)
     rationale: str = Field(max_length=400)
 

@@ -844,6 +844,208 @@ than any feature in the repo.
 
 ---
 
+## Fixing the libmagic startup failure (BO-08)
+
+The `api` image crashes at import with `ImportError: failed to find libmagic`. `python-magic` is a
+thin ctypes wrapper — it needs the system C library `libmagic1`, which the Dockerfile's runtime
+stage never installs. The builder stage has it via build-essential, which is why this stayed hidden
+until a rebuild. It causes two `make test-int` failures and blocks the `bo-08` tag.
+
+**1.** Open the Dockerfile and find the runtime stage — the second `FROM`, the one that does not
+install build tools.
+
+**2.** Add an install line after that `FROM`, before the `COPY` of application code:
+
+```dockerfile
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libmagic1 \
+ && rm -rf /var/lib/apt/lists/*
+```
+
+Put it before the `COPY` so Docker's layer cache keeps it across code edits. If the runtime stage
+already has an `apt-get install` block, add `libmagic1` to that list instead of adding a second one.
+
+**3.** Rebuild and restart just that service:
+
+```bash
+docker compose build api
+docker compose up -d api
+docker compose ps --all          # --all, or a crashed container won't appear
+```
+
+Wait for `api` to read healthy. If it doesn't, read the logs before changing anything else:
+
+```bash
+docker compose logs --tail=50 api
+```
+
+**4.** Confirm the fix landed:
+
+```bash
+make test-int                    # expect 48 passed, 0 failed
+```
+
+Both previously failing tests — `test_healthz_up_readyz_down` and `test_stack_healthy` — should
+now pass. If the count is 48 and green, tag:
+
+```bash
+git add -A && git commit -m "BO-08: Neo4j graph store; fix missing libmagic1 in runtime image"
+git tag bo-08
+```
+
+One thing worth noticing about this defect: a stale twelve-hour-old image was serving the whole
+time, so every health check passed against a build that no longer matched the Dockerfile. That is
+the same shape as the other blind spots in this project — the check ran, it just wasn't looking at
+the thing you thought it was. After any Dockerfile change, rebuild before trusting a green run.
+
+---
+
+## The README and the 429 note
+
+BO-07 was supposed to create `README.md` and it never happened, so the note owed since BO-06 has
+been unowned across two stages. It's five minutes of work, and leaving it unowned a third time is
+how it gets forgotten entirely.
+
+Create `README.md` at the repo root with at least this much:
+
+```markdown
+# Hybrid GraphRAG
+
+Dense vector search plus knowledge-graph traversal, with async ingestion, a self-hosted LLM
+gateway, a self-correcting query pipeline, and full OpenTelemetry observability.
+
+## Running the tests
+
+    make test        # unit
+    make test-int    # integration (quota-consuming tests excluded)
+    make test-llm    # the three tests that make real provider calls
+
+`make test-llm` calls live provider APIs on free tiers. **A 429 from it is a quota result, not a
+defect** — the Groq free tier is 8000 TPM shared across the organisation. Re-run it later rather
+than treating it as a failure.
+
+## Corpus
+
+The evaluation corpus is post-training-cutoff material, so a correct answer demonstrates
+retrieval rather than recall.
+```
+
+Expand it later — the roadmap section, the architecture summary, and the T1/T2 upgrade path are
+worth writing before you show this to anyone. But get the file into the repo now, in the same
+commit as the libmagic fix, so the debt is closed.
+
+---
+
+## The `api` container is slow to become healthy (since BO-08)
+
+### What changed and why it matters
+
+BO-08 made `Container.create()` build the Neo4j driver and call `ensure_schema()` **at startup**,
+before the app can serve traffic. That is deliberate — better to fail immediately than to serve a
+process that will break on its first graph query. But it means `api` now has to wait for Neo4j to
+accept connections before it reports healthy, and Neo4j is one of the slowest containers in this
+stack to come up. So `api` got slower in this stage specifically. You noticed this; it is expected,
+not a bug.
+
+The risk is not the slowness. It's that `test_stack_healthy` will now pass or fail depending on
+whether Neo4j happened to be warm. A test that passes on a warm stack and fails on a cold `make up`
+is flaky, and flaky tests get ignored — which is how a real failure eventually slips through. So
+either the healthcheck's grace period covers the real startup time, or it doesn't and you'll be
+re-running tests to make them pass. Fix it once, now.
+
+### Step 1 — Measure it cold
+
+"Cold" means Neo4j starting from nothing, which is the worst case and the one the grace period has
+to cover.
+
+```bash
+cd ~/projects/GraphRAG
+docker compose down
+docker compose up -d
+```
+
+Then watch until `api` reports healthy, timing it:
+
+```bash
+time until [ "$(docker inspect -f '{{.State.Health.Status}}' $(docker compose ps -q api))" = "healthy" ]; do sleep 2; done
+```
+
+That prints elapsed time once `api` goes healthy. **Write the number down.** If it never goes
+healthy, stop and read `docker compose logs --tail=50 api` — that's a different problem.
+
+### Step 2 — Compare it to the configured grace period
+
+Open `docker-compose.yml`, find the `api` service, and look at its `healthcheck:` block:
+
+```yaml
+    healthcheck:
+      test: [...]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s        # <- this is the one that matters
+```
+
+`start_period` is the grace window: failures during it don't count against `retries`. Compare it to
+your measured time.
+
+- Measured time is **comfortably under** `start_period` (say, under half) → nothing to do. Note the
+  number in `HANDOFF.md` and move on.
+- Measured time is **close to or above** `start_period` → go to step 3.
+
+### Step 3 — Raise it, with a comment saying why
+
+Set `start_period` to roughly **double** your measured cold-start time, rounded up. If `api` took 45
+seconds, use 90s.
+
+```yaml
+    healthcheck:
+      test: [...]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      # api calls ensure_schema() against Neo4j during Container.create(), so cold start
+      # waits on Neo4j accepting connections. Measured ~45s cold; 90s leaves real headroom.
+      start_period: 90s
+```
+
+Write the comment. Six months from now the number looks arbitrary without it, and someone will
+"tidy" it back down.
+
+Only raise `start_period`. Leave `interval`, `timeout`, and `retries` alone — those govern behaviour
+*after* startup, and loosening them would mean a genuinely dead `api` takes longer to be noticed.
+The point is to stop punishing a slow start, not to make the healthcheck less sensitive.
+
+### Step 4 — Verify
+
+```bash
+docker compose down
+docker compose up -d
+docker compose ps --all          # --all, or a crashed container won't appear
+make test-int
+```
+
+Two clean cold runs in a row is the bar. One could be luck.
+
+```bash
+git add docker-compose.yml && git commit -m "chore: raise api start_period for Neo4j-dependent startup"
+```
+
+### If it doesn't get better
+
+If `api` takes much longer than a minute cold, the cause is probably Neo4j rather than `api` itself.
+Check whether Neo4j has a healthcheck and whether `api` waits on it:
+
+```bash
+docker compose logs --tail=30 neo4j
+```
+
+If `api` has `depends_on: neo4j` with `condition: service_healthy`, it can't start until Neo4j is
+ready, and the whole wait shows up as `api` slowness. That's correct behaviour — the number to fix
+is still `api`'s `start_period`.
+
+---
+
 ## Known issue — the worker can wedge and stay wedged
 
 Seen once during BO-06: `test_stack_healthy` failed because the `worker` container had been

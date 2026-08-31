@@ -18,15 +18,13 @@ why HAS_CHUNK carries the offsets" — i.e. BLUEPRINT itself says HAS_CHUNK carr
 carries `page`, `char_start`, `char_end`, `ingested_at`; `uri` is read off the Document node
 instead of duplicated onto every edge. Reported alongside the rest of this BO's findings.
 
-SPEC GAP — no MENTIONS-writing port method: ARCHITECTURE §6.3 also declares
-`(Chunk)-[:MENTIONS {surface, confidence, char_start, char_end}]->(Entity)`, but
-`core.ports.GraphStore` (BLUEPRINT §3.5, authoritative) exposes no method to write it — only
-`upsert_entities`/`upsert_relations`/`add_alias`/document+chunk methods. Inventing a
-`upsert_mentions` port method would mean editing `core/ports.py`, a BO-01 file this BO doesn't
-own, so MENTIONS edges are never created. `co_mentioned` and `top_entities_for_chunks` are
-implemented purely over `RELATES.chunk_id` instead (every relation already carries chunk_id/
-doc_id per ARCHITECTURE's own "every relationship carries chunk_id + doc_id" design principle),
-which needs no MENTIONS edge. Reported as a judgment call, not silently assumed.
+`upsert_mentions` (BLUEPRINT §3.5, `GraphStore` Protocol) writes `(Chunk)-[:MENTIONS]->(Entity)`
+(ARCHITECTURE §6.3), keeping an entity reachable from its source chunk when it participates in
+zero `RELATES` edges. Like `upsert_relations`, it rejects (raises `ValidationError`) any mention
+missing required linkage — here `chunk_id` or `entity_id` — before touching the database.
+`co_mentioned` and `top_entities_for_chunks` still traverse over `RELATES.chunk_id` only; BO-09's
+directive was to add the write path and wire it from the resolve task, not to rewire the
+existing read-side templates onto MENTIONS — reported here, not done silently.
 
 JUDGMENT CALL — `Entity.aliases` on `traverse()` results: the domain model requires
 `aliases: list[str]`, but the graph stores aliases only as incoming `ALIAS_OF` edges, not a node
@@ -61,10 +59,13 @@ be able to loosen.
 `max_hops` (`retrieval.graph.max_hops`, currently 2) is baked into `neighbors`' Cypher text as an
 explicit two-stage unroll, not a variable-length `*1..$max_hops` pattern: Cypher's per-hop
 ORDER BY/LIMIT idiom has no equivalent for a *dynamic* hop count, and `CYPHER_TEMPLATES` is
-declared `Final` (a static dict, not a function of settings). If `retrieval.graph.max_hops` is
-ever reconfigured away from 2, this template's Cypher text would need to change with it — a
-coupling neither BLUEPRINT nor ARCHITECTURE resolves, reported as a spec gap rather than solved
-by inventing a dynamic-hop-count query builder this BO wasn't asked for.
+declared `Final` (a static dict, not a function of settings). BO-08 reported the resulting
+config/code coupling as an unresolved spec gap; BO-09 item 0 was explicitly directed to close it
+with a startup guard: `__init__` now raises `ValidationError` immediately if
+`retrieval.graph.max_hops != _NEIGHBORS_TEMPLATE_HOPS` (2), turning a silent 2-hop fallback into
+a fail-fast at construction time, before any traversal runs. The guard does not make the hop
+count dynamic — that would still mean a query-builder this BO wasn't asked for — it only makes
+the mismatch impossible to miss.
 """
 
 from __future__ import annotations
@@ -78,13 +79,18 @@ from neo4j.exceptions import DriverError, Neo4jError
 
 from graphrag.core.errors import GraphBackendUnavailable, ValidationError
 from graphrag.core.ids import content_hash
-from graphrag.core.models import Chunk, Entity, EntityType, GraphPath, Relation, SourceRef
+from graphrag.core.models import Chunk, Entity, EntityType, GraphPath, Mention, Relation, SourceRef
 
 if TYPE_CHECKING:
     from neo4j import AsyncDriver
     from neo4j.graph import Node, Path, Relationship
 
     from graphrag.config.settings import Settings
+
+# The `neighbors` template's Cypher text hard-codes a two-stage hop unroll (see the module
+# docstring) -- this is that same constant, named so `__init__`'s guard and the Cypher text
+# can't drift from each other silently.
+_NEIGHBORS_TEMPLATE_HOPS: Final[int] = 2
 
 CYPHER_TEMPLATES: Final[dict[str, str]] = {
     "neighbors": """
@@ -181,6 +187,14 @@ _UPSERT_RELATIONS_CYPHER: Final[str] = """
     SET r.confidence = row.confidence, r.evidence_span = row.evidence_span
 """
 
+_UPSERT_MENTIONS_CYPHER: Final[str] = """
+    UNWIND $mentions AS row
+    MERGE (c:Chunk {chunk_id: row.chunk_id})
+    MERGE (e:Entity {canonical_id: row.entity_id})
+    MERGE (c)-[m:MENTIONS {char_start: row.char_start, char_end: row.char_end}]->(e)
+    SET m.surface = row.surface, m.confidence = row.confidence
+"""
+
 _ADD_ALIAS_CYPHER: Final[str] = """
     MERGE (a:Entity {canonical_id: $alias_id})
     MERGE (c:Entity {canonical_id: $canonical_id})
@@ -264,15 +278,32 @@ class Neo4jGraphStore:
         - upsert_relations REJECTS (raises ValidationError) any Relation with a null chunk_id
           or doc_id before touching the database.
         - upsert_chunks stores the FULL Chunk.text.
+        - upsert_mentions links every mention to its resolved entity, independent of whether
+          that entity participates in any RELATES edge. REJECTS (raises ValidationError) any
+          Mention with a null chunk_id or entity_id before touching the database.
         - traverse(template, params) looks template up in CYPHER_TEMPLATES by key and raises
           ValidationError on an unknown key. It never accepts raw Cypher.
         - Library exceptions wrap to GraphBackendUnavailable.
+        - __init__ raises ValidationError if retrieval.graph.max_hops doesn't match the
+          `neighbors` template's hard-coded hop unroll -- see module docstring.
     """
 
     def __init__(self, driver: AsyncDriver, settings: Settings) -> None:
         self._driver = driver
         self._database = settings.stores.neo4j.database
         self._graph = settings.retrieval.graph
+        if self._graph.max_hops != _NEIGHBORS_TEMPLATE_HOPS:
+            raise ValidationError(
+                f"retrieval.graph.max_hops={self._graph.max_hops} does not match the "
+                f"`neighbors` template's hard-coded {_NEIGHBORS_TEMPLATE_HOPS}-hop unroll in "
+                "CYPHER_TEMPLATES. Reconfiguring max_hops away from "
+                f"{_NEIGHBORS_TEMPLATE_HOPS} would otherwise silently cap graph traversal at "
+                f"{_NEIGHBORS_TEMPLATE_HOPS} hops regardless of what the config promises.",
+                details={
+                    "configured_max_hops": self._graph.max_hops,
+                    "template_hops": _NEIGHBORS_TEMPLATE_HOPS,
+                },
+            )
 
     async def _execute(
         self,
@@ -370,6 +401,30 @@ class Neo4jGraphStore:
         ]
         await self._execute(
             _UPSERT_RELATIONS_CYPHER, {"relations": rows}, routing=RoutingControl.WRITE
+        )
+
+    async def upsert_mentions(self, mentions: Sequence[Mention]) -> None:
+        for mention in mentions:
+            if mention.chunk_id is None or mention.entity_id is None:
+                raise ValidationError(
+                    "Mention is missing required linkage (chunk_id/entity_id)",
+                    details={"surface": mention.surface},
+                )
+        if not mentions:
+            return
+        rows = [
+            {
+                "chunk_id": str(mention.chunk_id),
+                "entity_id": str(mention.entity_id),
+                "surface": mention.surface,
+                "confidence": mention.confidence,
+                "char_start": mention.char_start,
+                "char_end": mention.char_end,
+            }
+            for mention in mentions
+        ]
+        await self._execute(
+            _UPSERT_MENTIONS_CYPHER, {"mentions": rows}, routing=RoutingControl.WRITE
         )
 
     async def add_alias(

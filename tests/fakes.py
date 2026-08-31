@@ -27,6 +27,7 @@ from graphrag.core.models import (
     EntityType,
     GraphPath,
     JobStatus,
+    Mention,
     Relation,
     ScoredChunk,
     SourceRef,
@@ -72,6 +73,7 @@ class FakeEmbedder:
 
     def __init__(self, dimensions: int = 8) -> None:
         self._dimensions = dimensions
+        self.dense_calls: list[dict[str, Any]] = []
 
     @property
     def dimensions(self) -> int:
@@ -80,6 +82,7 @@ class FakeEmbedder:
     async def embed_dense(
         self, texts: Sequence[str], *, is_query: bool = False
     ) -> list[list[float]]:
+        self.dense_calls.append({"texts": list(texts), "is_query": is_query})
         return [self._dense_vector(text) for text in texts]
 
     async def embed_sparse(self, texts: Sequence[str]) -> list[SparseVector]:
@@ -110,6 +113,7 @@ class FakeVectorStore:
         self.sparse: dict[UUID, SparseVector] = {}
         self.entities: dict[UUID, Entity] = {}
         self.entity_vectors: dict[UUID, list[float]] = {}
+        self.hybrid_search_calls = 0
         self.fail = False
 
     def _check(self) -> None:
@@ -156,6 +160,7 @@ class FakeVectorStore:
         filters: dict[str, Any] | None = None,
     ) -> list[ScoredChunk]:
         self._check()
+        self.hybrid_search_calls += 1
         return [
             ScoredChunk(chunk=chunk, score=1.0, rank=rank, origin="vector")
             for rank, chunk in enumerate(list(self.chunks.values())[:top_k], start=1)
@@ -193,6 +198,7 @@ class FakeGraphStore:
         self.chunks: dict[UUID, Chunk] = {}
         self.entities: dict[UUID, Entity] = {}
         self.relations: list[Relation] = []
+        self.mentions: list[Mention] = []
         self.aliases: dict[UUID, UUID] = {}
         self.fail = False
 
@@ -223,6 +229,10 @@ class FakeGraphStore:
     async def upsert_relations(self, relations: Sequence[Relation]) -> None:
         self._check()
         self.relations.extend(relations)
+
+    async def upsert_mentions(self, mentions: Sequence[Mention]) -> None:
+        self._check()
+        self.mentions.extend(mentions)
 
     async def add_alias(
         self, alias_id: UUID, canonical_id: UUID, score: float, method: str

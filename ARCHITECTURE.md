@@ -1055,8 +1055,8 @@ CREATE INDEX entity_norm     IF NOT EXISTS FOR (e:Entity)   ON (e.name_normalize
 (:Chunk    {chunk_id, ord, text})     // FULL text, not a preview — see the fail-safe note in §6.2
 (:Entity   {canonical_id, name, name_normalized, type, mention_count, created_at})
 
-(Document)-[:HAS_CHUNK {ord}]->(Chunk)
-(Chunk)-[:MENTIONS {surface, confidence, char_start, char_end}]->(Entity)
+(Document)-[:HAS_CHUNK {ord, page, char_start, char_end, ingested_at}]->(Chunk)
+(Chunk)-[:MENTIONS {surface, confidence, char_start, char_end}]->(Entity)   # NOT WRITTEN until BO-09
 (Entity)-[:ALIAS_OF {score, method, decided_at}]->(Entity)     // audit trail, never deleted
 (Entity)-[:RELATES {type, confidence, chunk_id, doc_id, evidence_span}]->(Entity)
 ```

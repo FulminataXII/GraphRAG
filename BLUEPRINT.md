@@ -549,7 +549,6 @@ class ScoredChunk(BaseModel):
 class Mention(BaseModel):
     surface: str; type: EntityType
     chunk_id: UUID; char_start: int; char_end: int; confidence: float
-    entity_id: UUID | None = None
 
 class Entity(BaseModel):
     canonical_id: UUID; name: str; name_normalized: str
@@ -600,7 +599,6 @@ class RoutePlan(BaseModel):
     strategy: Literal["vector", "graph", "hybrid"]
     template: str = Field(default="neighbors")
     seed_entities: list[str]; hops: int
-    relation_type: str | None = None
     sub_queries: list[str]; rationale: str
 
 class DocumentRecord(BaseModel):
@@ -1186,6 +1184,23 @@ Every template:
 
 Templates: neighbors, path_between, entities_by_relation, co_mentioned, top_entities_for_chunks
 
+Param shapes (ARCHITECTURE §8.3 names the signatures; this pins the Cypher against MENTIONS/RELATES):
+  - neighbors(entity, hops) — RELATES traversal from one seed entity.
+  - path_between(a, b, max_hops) — shortest RELATES path between two seed entities.
+  - entities_by_relation(type) — entities connected by a named RELATES.type value.
+  - co_mentioned(entity, k) — MUST traverse
+    (:Entity {canonical_id: $entity})<-[:MENTIONS]-(:Chunk)-[:MENTIONS]->(:Entity), returning up
+    to $k other entities sharing a chunk with the seed. ⚠️ BO-08 shipped this filtering on
+    `RELATES.chunk_id = $chunk_id` instead — dead code, because GraphRetriever only ever has an
+    entity canonical_id to give it (from EntityLinker, via plan.seed_entities), never a chunk_id.
+    Fixed at BO-09 cleanup: key on entity via MENTIONS, not RELATES.chunk_id. RoutePlan does NOT
+    need a chunk_id field for this — the entity param is exactly what it already supplies.
+  - top_entities_for_chunks(chunk_ids) — entities MENTIONed in a given chunk set, ranked by
+    mention count. NOT reachable via plan.template today: RoutePlan carries no chunk_ids-shaped
+    field, so nothing can populate this param from the router. Registered and harmless (traverse()
+    still validates params against the template), but do not count it as covered until something
+    actually calls it with real chunk_ids — revisit at BO-10 if a node needs it.
+
 ⚠️ `neighbors` hard-codes a 2-hop unroll matching retrieval.graph.max_hops. Cypher's per-hop
 ORDER BY/LIMIT idiom has no dynamic-hop-count equivalent, and CYPHER_TEMPLATES is Final. So the
 template text and the config value are coupled with nothing enforcing it. Neo4jStore.__init__
@@ -1723,7 +1738,6 @@ class RoutePlanOut(BaseModel):
     seed_entities: list[str] = Field(default_factory=list, max_length=8,
         description="Entity names mentioned in the question; empty for non-entity queries")
     hops: int = Field(ge=1, le=3)
-    relation_type: str | None = Field(default=None, description="Only required for entities_by_relation template")
     sub_queries: list[str] = Field(default_factory=list, max_length=4)
     rationale: str = Field(max_length=400)
 

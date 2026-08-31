@@ -25,7 +25,7 @@ from graphrag.config.settings import Settings
 from graphrag.core.events import ExtractEntitiesPayload, JobEnvelope, ResolveEntitiesPayload
 from graphrag.core.ids import chunk_id as compute_chunk_id
 from graphrag.core.ids import content_hash
-from graphrag.core.models import Chunk, DocumentStatus, EntityType, SourceRef, SparseVector
+from graphrag.core.models import Chunk, DocumentStatus, EntityType, Mention, SourceRef, SparseVector
 from graphrag.services.ingestion.chunker import chunk_document
 from graphrag.services.ingestion.parser import DocumentParser
 from graphrag.services.orchestration.schemas import EntityExtraction, MentionOut, RelationOut
@@ -301,6 +301,181 @@ async def test_alias_edges_persisted(graph_store: Neo4jGraphStore, clean_neo4j: 
         parameters_={"alias_id": str(loser_id)},
     )
     assert len(records) == 1  # the loser was never deleted
+
+
+async def test_mentions_edges_exist(graph_store: Neo4jGraphStore, clean_neo4j: Any) -> None:
+    """A MENTIONS edge must reach a chunk's entity even when that entity participates in ZERO
+    relations (BUILD_ORDER BO-09 item 0, carried over from BO-08). `related_a` and `lonely` are
+    BOTH mentioned in `chunk`, but only `related_a` is also a RELATES endpoint -- a MENTIONS
+    count that only covers relation-bearing entities is exactly the vacuous-pass failure
+    BUILD_ORDER calls out, so this asserts `lonely`'s canonical_id specifically, not just a
+    non-zero count.
+    """
+    chunk = Chunk(
+        chunk_id=compute_chunk_id("mention edge test chunk text"),
+        text="mention edge test chunk text",
+        content_hash=content_hash("mention edge test chunk text"),
+        sources=[
+            SourceRef(
+                doc_id="doc-mentions",
+                uri="file:///doc-mentions.txt",
+                page=None,
+                char_start=0,
+                char_end=29,
+                ingested_at=datetime(2024, 1, 1, tzinfo=UTC),
+            )
+        ],
+        entity_ids=[],
+    )
+    await _seed_document(graph_store, "doc-mentions", [chunk])
+
+    related_a = make_entity(name="Related A", canonical_id=uuid4())
+    related_b = make_entity(name="Related B", canonical_id=uuid4())
+    lonely = make_entity(name="Lonely Entity", canonical_id=uuid4())  # zero RELATES edges
+    await graph_store.upsert_entities([related_a, related_b, lonely])
+    await graph_store.upsert_relations(
+        [
+            make_relation(
+                src_id=related_a.canonical_id,
+                dst_id=related_b.canonical_id,
+                chunk_id=chunk.chunk_id,
+                doc_id="doc-mentions",
+            )
+        ]
+    )
+
+    mentions = [
+        Mention(
+            surface="Related A",
+            type=related_a.type,
+            chunk_id=chunk.chunk_id,
+            char_start=0,
+            char_end=9,
+            confidence=0.9,
+            entity_id=related_a.canonical_id,
+        ),
+        Mention(
+            surface="Lonely Entity",
+            type=lonely.type,
+            chunk_id=chunk.chunk_id,
+            char_start=10,
+            char_end=23,
+            confidence=0.9,
+            entity_id=lonely.canonical_id,
+        ),
+    ]
+    await graph_store.upsert_mentions(mentions)
+
+    records, _summary, _keys = await clean_neo4j.execute_query(
+        "MATCH (c:Chunk {chunk_id: $chunk_id})-[:MENTIONS]->(e:Entity) "
+        "RETURN e.canonical_id AS canonical_id",
+        database_="neo4j",
+        parameters_={"chunk_id": str(chunk.chunk_id)},
+    )
+    mentioned_ids = {UUID(record["canonical_id"]) for record in records}
+
+    assert lonely.canonical_id in mentioned_ids, (
+        "an entity with zero RELATES edges must still be reachable via MENTIONS -- a MENTIONS "
+        "count that only covers relation-bearing entities is the vacuous-pass BUILD_ORDER warns "
+        "about"
+    )
+    assert related_a.canonical_id in mentioned_ids
+    assert related_b.canonical_id not in mentioned_ids  # never mentioned, only related
+
+
+async def test_resolve_task_upserts_mentions_for_zero_relation_entity(
+    graph_store: Neo4jGraphStore, graph_settings: Settings, clean_neo4j: Any
+) -> None:
+    """Proves the SECOND half of BO-09 item 0 -- "Call upsert_mentions from the resolve task" --
+    through the real `resolve_entities` arq task, not just the port method directly (that's
+    `test_mentions_edges_exist`'s job). One extracted entity ("Solo Entity") appears in zero
+    LLM-extracted relations; after `resolve_entities` runs, it must still be reachable from its
+    chunk via MENTIONS.
+    """
+    doc_id = "doc-corpus-04-mentions"
+    text = _CORPUS_DOC.read_text(encoding="utf-8")
+    chunks = _build_chunks(doc_id, "file:///corpus/04.txt", text, graph_settings)
+    target_chunk = next(c for c in chunks if "Tim Cook" in c.text and "Apple" in c.text)
+    await _seed_document(graph_store, doc_id, chunks)
+
+    solo_surface = "Solo Entity With No Relations"
+    fake_llm = FakeLLMClient()
+    fake_llm.script_structured(
+        "bulk",
+        EntityExtraction(
+            entities=[
+                MentionOut(
+                    chunk_id=str(target_chunk.chunk_id),
+                    surface=solo_surface,
+                    type=EntityType.ORG,
+                    char_start=0,
+                    char_end=1,
+                    confidence=0.9,
+                ),
+            ],
+            relations=[],  # zero relations -- this entity has no RELATES endpoint at all
+        ),
+    )
+
+    fake_vector_store = FakeVectorStore()
+    await fake_vector_store.upsert_chunks(
+        chunks,
+        [[0.0] * 8 for _ in chunks],
+        [SparseVector(indices=[], values=[]) for _ in chunks],
+    )
+    metrics, _reader = make_metrics()
+    container = Container(
+        settings=graph_settings,
+        ledger=FakeDocumentLedger(),
+        sources=FakeSourceRegistry(),
+        cache=FakeCache(),
+        job_queue=FakeJobQueue(),
+        readyz_prober=ReadyzProber({}, cache_s=5, timeout_s=1),
+        metrics=metrics,
+        vector_store=fake_vector_store,
+        graph_store=graph_store,
+        embedder=FakeEmbedder(dimensions=8),
+        llm_client=fake_llm,
+    )
+    await container.ledger.register(doc_id, "file:///corpus/04.txt", "sha-mentions", "text/plain")
+    await container.ledger.set_status(doc_id, DocumentStatus.EXTRACTING)
+
+    ctx = {"container": container, "job_id": "job-mentions", "job_try": 1}
+    extract_env = JobEnvelope(
+        correlation_id="cid-mentions",
+        otel={},
+        enqueued_at=datetime.now(UTC),
+        payload=ExtractEntitiesPayload(doc_id=doc_id, chunk_ids=[c.chunk_id for c in chunks]),
+    )
+    await extract_entities(ctx, extract_env)
+
+    [enqueued] = [e for e in container.job_queue.enqueued if e["task"] == "resolve_entities"]
+    resolve_env: JobEnvelope[ResolveEntitiesPayload] = enqueued["envelope"]
+    assert resolve_env.payload.mentions, "extract_entities must carry mentions across the queue hop"
+
+    await resolve_entities(ctx, resolve_env)
+
+    records, _summary, _keys = await clean_neo4j.execute_query(
+        "MATCH (c:Chunk {chunk_id: $chunk_id})-[:MENTIONS]->(e:Entity) "
+        "RETURN e.canonical_id AS canonical_id, e.name AS name",
+        database_="neo4j",
+        parameters_={"chunk_id": str(target_chunk.chunk_id)},
+    )
+    matches = [r for r in records if r["name"] == solo_surface]
+    assert matches, (
+        "the resolve task must call GraphStore.upsert_mentions for an entity that never "
+        "appears in any relation -- without that call, this entity is only in Qdrant, not "
+        "reachable from its source chunk in the graph"
+    )
+
+    # And it genuinely has zero RELATES edges -- otherwise this test wouldn't distinguish
+    # "upsert_mentions was called" from "upsert_relations would have linked it anyway".
+    relation_count, _summary, _keys = await clean_neo4j.execute_query(
+        "MATCH (e:Entity {canonical_id: $canonical_id})-[r:RELATES]-() RETURN count(r) AS n",
+        database_="neo4j",
+        parameters_={"canonical_id": matches[0]["canonical_id"]},
+    )
+    assert relation_count[0]["n"] == 0
 
 
 async def test_traverse_populates_cypher_templates(graph_store: Neo4jGraphStore) -> None:

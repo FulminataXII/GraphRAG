@@ -16,7 +16,7 @@ from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
 from graphrag.adapters.telemetry.metrics import Metrics
 from graphrag.core.ids import chunk_id, content_hash, entity_id
-from graphrag.core.models import Chunk, Entity, EntityType, Relation, SourceRef
+from graphrag.core.models import Chunk, Entity, EntityType, Mention, Relation, SourceRef
 
 
 def make_source_ref(
@@ -71,6 +71,27 @@ def make_entity(
         type=type,
         aliases=aliases if aliases is not None else [],
         mention_count=mention_count,
+    )
+
+
+def make_mention(
+    *,
+    surface: str = "Acme",
+    type: EntityType = EntityType.ORG,
+    chunk_id: UUID | None = None,
+    char_start: int = 0,
+    char_end: int = 4,
+    confidence: float = 0.9,
+    entity_id: UUID | None = None,
+) -> Mention:
+    return Mention(
+        surface=surface,
+        type=type,
+        chunk_id=chunk_id if chunk_id is not None else uuid4(),
+        char_start=char_start,
+        char_end=char_end,
+        confidence=confidence,
+        entity_id=entity_id,
     )
 
 

@@ -125,3 +125,16 @@ async def test_upsert_relations_rejects_whole_batch_on_one_bad_relation(settings
     bad = make_relation().model_copy(update={"chunk_id": None})
     with pytest.raises(ValidationError):
         await store.upsert_relations([good, bad])
+
+
+def test_max_hops_mismatch_raises(settings: Any) -> None:
+    """`__init__` must raise immediately -- before any I/O, proven by `_ExplodingDriver` -- if
+    `retrieval.graph.max_hops` doesn't match the `neighbors` template's hard-coded 2-hop unroll.
+    Without this guard, a config reconfigured away from 2 would silently cap every graph
+    traversal at 2 hops regardless of what `max_hops` promises (BUILD_ORDER BO-09 item 0)."""
+    mismatched_graph = settings.retrieval.graph.model_copy(update={"max_hops": 1})
+    mismatched_retrieval = settings.retrieval.model_copy(update={"graph": mismatched_graph})
+    mismatched_settings = settings.model_copy(update={"retrieval": mismatched_retrieval})
+
+    with pytest.raises(ValidationError):
+        Neo4jGraphStore(_ExplodingDriver(), mismatched_settings)

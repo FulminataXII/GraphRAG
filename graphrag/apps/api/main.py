@@ -62,6 +62,9 @@ from graphrag.adapters.telemetry.otel import init_telemetry, meter, shutdown_tel
 from graphrag.apps.api.errors import install_exception_handlers
 from graphrag.config.settings import Settings, get_settings
 from graphrag.core.errors import ConflictError
+from graphrag.services.retrieval.graph import GraphRetriever
+from graphrag.services.retrieval.linker import EntityLinker
+from graphrag.services.retrieval.vector import VectorRetriever
 
 if TYPE_CHECKING:
     from graphrag.core.ports import Cache, DocumentLedger, Embedder, LLMClient
@@ -172,6 +175,9 @@ class Container:
         graph_store: GraphStorePort | None = None,
         embedder: Embedder | None = None,
         llm_client: LLMClient | None = None,
+        vector_retriever: VectorRetriever | None = None,
+        graph_retriever: GraphRetriever | None = None,
+        entity_linker: EntityLinker | None = None,
         closers: list[tuple[str, Closer]] | None = None,
     ) -> None:
         self.settings = settings
@@ -183,6 +189,9 @@ class Container:
         self.graph_store = graph_store
         self.embedder = embedder
         self.llm_client = llm_client
+        self.vector_retriever = vector_retriever
+        self.graph_retriever = graph_retriever
+        self.entity_linker = entity_linker
         self.metrics = metrics
         self._readyz_prober = readyz_prober
         self._closers = closers or []
@@ -295,6 +304,31 @@ class Container:
         sources = PostgresSourceRegistry(pg_engine)
         job_queue = ArqJobQueue(arq_pool)
 
+        entity_linker = EntityLinker(embedder=embedder, vector_store=vector_store)
+        vector_retriever = VectorRetriever(
+            vector_store=vector_store,
+            embedder=embedder,
+            cache=cache,
+            ledger=ledger,
+            prefetch_limit=settings.retrieval.vector.prefetch_limit,
+            rrf_k=settings.retrieval.fusion.rrf_k,
+            cache_prefix=settings.cache.retrieval.prefix,
+            cache_ttl_s=settings.cache.retrieval.ttl_s,
+            cache_enabled=settings.cache.retrieval.enabled,
+            config_hash=settings.config_hash,
+        )
+        graph_retriever = GraphRetriever(
+            graph_store=graph_store,
+            vector_store=vector_store,
+            linker=entity_linker,
+            entity_link_top_k=settings.retrieval.graph.entity_link_top_k,
+            entity_link_min_score=settings.retrieval.graph.entity_link_min_score,
+            max_degree_per_hop=settings.retrieval.graph.max_degree_per_hop,
+            timeout_ms=settings.retrieval.graph.timeout_ms,
+            max_paths=settings.retrieval.graph.max_paths,
+            hydrate_from=settings.retrieval.graph.hydrate_from,
+        )
+
         async def _probe_postgres() -> bool:
             async with pg_engine.connect() as conn:
                 await conn.execute(text("SELECT 1"))
@@ -338,6 +372,9 @@ class Container:
             graph_store=graph_store,
             embedder=embedder,
             llm_client=llm_client,
+            vector_retriever=vector_retriever,
+            graph_retriever=graph_retriever,
+            entity_linker=entity_linker,
             closers=closers,
         )
 

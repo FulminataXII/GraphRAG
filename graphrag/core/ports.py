@@ -22,6 +22,7 @@ from graphrag.core.models import (
     EntityType,
     GraphPath,
     JobStatus,
+    Mention,
     Relation,
     ScoredChunk,
     SourceRef,
@@ -96,6 +97,18 @@ class GraphStore(Protocol):
     async def upsert_entities(self, entities: Sequence[Entity]) -> None: ...
     async def upsert_relations(self, relations: Sequence[Relation]) -> None:
         """Rejects any relation with a null chunk_id or doc_id."""
+
+    async def upsert_mentions(self, mentions: Sequence[Mention]) -> None:
+        """Write (:Chunk)-[:MENTIONS {surface, confidence, char_start, char_end}]->(:Entity).
+
+        Added BO-09 (BLUEPRINT §3.5). BO-08 shipped without it: `co_mentioned` and
+        `top_entities_for_chunks` were implemented over `RELATES.chunk_id` alone, which only
+        sees entities that participate in a relation. An entity the extractor found but linked
+        to nothing is invisible to both templates — and entity linking in BO-09 needs exactly
+        those. Rejects a mention whose `chunk_id` or `entity_id` is null (mirrors
+        `upsert_relations`' provenance check). `Mention.entity_id` is unset by extraction and
+        only populated by the resolve step — see `core.models.Mention`.
+        """
 
     async def add_alias(
         self, alias_id: UUID, canonical_id: UUID, score: float, method: str
