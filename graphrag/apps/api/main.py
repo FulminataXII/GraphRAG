@@ -38,6 +38,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI
@@ -62,6 +63,8 @@ from graphrag.adapters.telemetry.otel import init_telemetry, meter, shutdown_tel
 from graphrag.apps.api.errors import install_exception_handlers
 from graphrag.config.settings import Settings, get_settings
 from graphrag.core.errors import ConflictError
+from graphrag.core.ports import Clock
+from graphrag.services.orchestration.graph import NodeDeps, OrchestrationService
 from graphrag.services.retrieval.graph import GraphRetriever
 from graphrag.services.retrieval.linker import EntityLinker
 from graphrag.services.retrieval.vector import VectorRetriever
@@ -178,6 +181,7 @@ class Container:
         vector_retriever: VectorRetriever | None = None,
         graph_retriever: GraphRetriever | None = None,
         entity_linker: EntityLinker | None = None,
+        orchestrator: OrchestrationService | None = None,
         closers: list[tuple[str, Closer]] | None = None,
     ) -> None:
         self.settings = settings
@@ -192,6 +196,7 @@ class Container:
         self.vector_retriever = vector_retriever
         self.graph_retriever = graph_retriever
         self.entity_linker = entity_linker
+        self.orchestrator = orchestrator
         self.metrics = metrics
         self._readyz_prober = readyz_prober
         self._closers = closers or []
@@ -329,6 +334,22 @@ class Container:
             hydrate_from=settings.retrieval.graph.hydrate_from,
         )
 
+        class RealClock(Clock):
+            def now(self):
+                return datetime.now(UTC)
+
+        orchestrator = OrchestrationService(
+            NodeDeps(
+                llm=llm_client,
+                vector=vector_retriever,
+                graph=graph_retriever,
+                linker=entity_linker,
+                metrics=metrics,
+                settings=settings,
+                clock=RealClock(),
+            )
+        )
+
         async def _probe_postgres() -> bool:
             async with pg_engine.connect() as conn:
                 await conn.execute(text("SELECT 1"))
@@ -375,6 +396,7 @@ class Container:
             vector_retriever=vector_retriever,
             graph_retriever=graph_retriever,
             entity_linker=entity_linker,
+            orchestrator=orchestrator,
             closers=closers,
         )
 
@@ -434,10 +456,12 @@ def create_app() -> FastAPI:
     FastAPIInstrumentor.instrument_app(app)
     install_exception_handlers(app)
 
-    from graphrag.apps.api.routers import documents, health, jobs
+    from graphrag.apps.api.routers import debug, documents, health, jobs, query
 
     app.include_router(health.router)
+    app.include_router(debug.router)
     app.include_router(documents.router)
     app.include_router(jobs.router)
+    app.include_router(query.router)
 
     return app

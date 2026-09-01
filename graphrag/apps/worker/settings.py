@@ -16,16 +16,12 @@ from arq.connections import RedisSettings
 
 from graphrag.adapters.telemetry.logging import configure_logging
 from graphrag.adapters.telemetry.otel import init_telemetry, shutdown_telemetry
-from graphrag.apps.api.main import Container
-from graphrag.apps.worker.tasks.delete import delete_document
-from graphrag.apps.worker.tasks.extract import extract_entities
-from graphrag.apps.worker.tasks.ingest import ingest_document
-from graphrag.apps.worker.tasks.project import project_chunk_payload
-from graphrag.apps.worker.tasks.resolve import resolve_entities
 from graphrag.config.settings import get_settings
 
 
 async def _startup(ctx: dict[str, Any]) -> None:
+    from graphrag.apps.api.main import Container
+
     settings = get_settings()
     init_telemetry(settings, service_role="worker")
     configure_logging(settings, service_role="worker")
@@ -60,10 +56,10 @@ class WorkerSettings:
     """
 
     functions: ClassVar[list[Any]] = [
-        ingest_document,
-        extract_entities,
-        resolve_entities,
-        delete_document,
+        "graphrag.apps.worker.tasks.ingest.ingest_document",
+        "graphrag.apps.worker.tasks.extract.extract_entities",
+        "graphrag.apps.worker.tasks.resolve.resolve_entities",
+        "graphrag.apps.worker.tasks.delete.delete_document",
     ]
     on_startup = staticmethod(_startup)
     on_shutdown = staticmethod(_shutdown)
@@ -86,7 +82,7 @@ class ProjectionWorkerSettings:
     `docker-compose.yml`'s healthcheck `interval` for the `projection-worker` service.
     """
 
-    functions: ClassVar[list[Any]] = [project_chunk_payload]
+    functions: ClassVar[list[Any]] = ["graphrag.apps.worker.tasks.project.project_chunk_payload"]
     on_startup = staticmethod(_startup)
     on_shutdown = staticmethod(_shutdown)
     redis_settings = RedisSettings.from_dsn(get_settings().stores.redis.url)

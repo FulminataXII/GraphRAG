@@ -92,10 +92,11 @@ async def _ingest_paths(container: Container, files: list[Path], *, wait: bool) 
         uri = persist_upload(raw, doc_id)
         is_new = await container.ledger.register(doc_id, uri, sha256, mime)
         if is_new:
+            cid = new_correlation_id()
             await container.job_queue.enqueue(
                 "ingest_document",
                 JobEnvelope(
-                    correlation_id=new_correlation_id(),
+                    correlation_id=cid,
                     otel={},
                     enqueued_at=datetime.now(UTC),
                     payload=IngestDocumentPayload(
@@ -104,7 +105,7 @@ async def _ingest_paths(container: Container, files: list[Path], *, wait: bool) 
                 ),
                 job_id=doc_id,
             )
-            typer.echo(f"enqueued {file_path} -> doc_id={doc_id}")
+            typer.echo(f"enqueued {file_path} -> doc_id={doc_id} cid={cid}")
         else:
             typer.echo(f"{file_path} already ingested -> doc_id={doc_id}")
         doc_ids.append(doc_id)

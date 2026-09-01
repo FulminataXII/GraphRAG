@@ -240,7 +240,7 @@ services:
       # needs no HTTP endpoint of its own.
       test: ["CMD", "arq", "--check", "graphrag.apps.worker.settings.WorkerSettings"]
       interval: 15s
-      timeout: 10s
+      timeout: 20s
       retries: 5
       start_period: 30s
 
@@ -281,7 +281,7 @@ services:
       test:
         ["CMD", "arq", "--check", "graphrag.apps.worker.settings.ProjectionWorkerSettings"]
       interval: 15s
-      timeout: 10s
+      timeout: 20s
       retries: 5
       start_period: 30s
 

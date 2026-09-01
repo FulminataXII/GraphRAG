@@ -7,8 +7,11 @@ cached, deadline-bounded).
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from graphrag.apps.api.deps import get_container
 from graphrag.apps.api.main import Container
@@ -22,7 +25,14 @@ async def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@router.get("/readyz")
+class ReadyzError(BaseModel):
+    status: Literal["not_ready"]
+    failing: list[str]
+
+
+@router.get(
+    "/readyz", responses={503: {"model": ReadyzError, "description": "Service Unavailable"}}
+)
 async def readyz(container: Container = Depends(get_container)) -> JSONResponse:
     """Readiness: concurrent, deadline-bounded backend probes, cached for
     `app.readyz_cache_s` seconds. 503 naming every failing backend when any probe fails."""

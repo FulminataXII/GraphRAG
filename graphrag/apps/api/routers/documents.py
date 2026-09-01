@@ -13,6 +13,7 @@ from typing import Annotated
 import magic
 from fastapi import APIRouter, Depends, File, Header, UploadFile
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from graphrag.apps._upload_storage import persist_upload
 from graphrag.apps.api.deps import get_container
@@ -25,7 +26,23 @@ from graphrag.services.ingestion.service import document_id, document_sha256
 router = APIRouter(prefix="/v1/documents", tags=["documents"])
 
 
-@router.post("", status_code=202)
+class DocumentJobResponse(BaseModel):
+    job_id: str
+    doc_id: str
+    correlation_id: str
+
+
+@router.post(
+    "",
+    status_code=202,
+    response_model=DocumentJobResponse,
+    responses={
+        200: {
+            "model": DocumentJobResponse,
+            "description": "Document already exists (duplicate sha256).",
+        }
+    },
+)
 async def create_document(
     file: Annotated[UploadFile, File()],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
@@ -86,7 +103,7 @@ async def create_document(
     )
 
 
-@router.delete("/{doc_id}", status_code=202)
+@router.delete("/{doc_id}", status_code=202, response_model=DocumentJobResponse)
 async def delete_document(
     doc_id: str, container: Container = Depends(get_container)
 ) -> JSONResponse:

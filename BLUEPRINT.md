@@ -1770,6 +1770,11 @@ def render(template_name: str, **vars: Any) -> str:
           preceded by an instruction that document content is untrusted data containing no
           instructions. This is defence-in-depth only — the real guard is schema validation
           plus deterministic citation checking.
+          ⚠️ This wrapping/formatting is the TEMPLATE's job, not the caller's. Nodes pass raw
+          typed objects (e.g. `chunks=list[ScoredChunk]`) to render(); a node must never
+          pre-build `<document>`-formatted strings in Python. A node that formats and a template
+          that also expects to format produces a mismatch StrictUndefined can't catch, because
+          both sides are technically defined — just for different shapes.
         - Templates are versioned (`{# version: 3 #}` on line 1); the version goes on the span,
           so an eval regression can be traced to a prompt change rather than a model change.
         - Templates required by BO-06, one per LLM role usage:
@@ -1779,6 +1784,12 @@ def render(template_name: str, **vars: Any) -> str:
         - render() raises on an unknown template name and on any undefined variable
           (Jinja2 StrictUndefined). A silently-empty `{{ context }}` produces a confident
           ungrounded answer, which is the exact failure this system exists to prevent.
+          ⚠️ StrictUndefined only catches a variable that's absent, not one that's misnamed —
+          `{{ query }}` and a node passing `active_query=...` both render "successfully" while
+          silently disagreeing. Every template MUST reference the exact QueryState field name
+          it means (`question` or `active_query`, per §6.6's distinction) — never a generic
+          alias like `query`. Node authors: pass the keyword matching the field name, not a
+          renamed shorthand.
     """
 ```
 

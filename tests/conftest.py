@@ -89,7 +89,7 @@ def container(settings: Settings, metrics: Metrics) -> Container:
     entirely: constructing `Container` directly with fakes is what keeps this a `unit` fixture.
     """
     empty_prober = ReadyzProber({}, cache_s=5, timeout_s=1)
-    return Container(
+    c = Container(
         settings=settings,
         ledger=FakeDocumentLedger(),
         sources=FakeSourceRegistry(),
@@ -102,6 +102,50 @@ def container(settings: Settings, metrics: Metrics) -> Container:
         embedder=FakeEmbedder(),
         llm_client=FakeLLMClient(),
     )
+
+    from graphrag.services.orchestration.graph import NodeDeps, OrchestrationService
+    from graphrag.services.retrieval.graph import GraphRetriever
+    from graphrag.services.retrieval.linker import EntityLinker
+    from graphrag.services.retrieval.vector import VectorRetriever
+    from tests.fakes import FakeClock
+
+    c.entity_linker = EntityLinker(embedder=c.embedder, vector_store=c.vector_store)
+    c.vector_retriever = VectorRetriever(
+        vector_store=c.vector_store,
+        embedder=c.embedder,
+        cache=c.cache,
+        ledger=c.ledger,
+        prefetch_limit=settings.retrieval.vector.prefetch_limit,
+        rrf_k=settings.retrieval.fusion.rrf_k,
+        cache_prefix=settings.cache.retrieval.prefix,
+        cache_ttl_s=settings.cache.retrieval.ttl_s,
+        cache_enabled=settings.cache.retrieval.enabled,
+        config_hash=settings.config_hash,
+    )
+    c.graph_retriever = GraphRetriever(
+        graph_store=c.graph_store,
+        vector_store=c.vector_store,
+        linker=c.entity_linker,
+        entity_link_top_k=settings.retrieval.graph.entity_link_top_k,
+        entity_link_min_score=settings.retrieval.graph.entity_link_min_score,
+        max_degree_per_hop=settings.retrieval.graph.max_degree_per_hop,
+        timeout_ms=settings.retrieval.graph.timeout_ms,
+        max_paths=settings.retrieval.graph.max_paths,
+        hydrate_from=settings.retrieval.graph.hydrate_from,
+    )
+
+    c.orchestrator = OrchestrationService(
+        NodeDeps(
+            llm=c.llm_client,
+            vector=c.vector_retriever,
+            graph=c.graph_retriever,
+            linker=c.entity_linker,
+            metrics=metrics,
+            settings=settings,
+            clock=FakeClock(),
+        )
+    )
+    return c
 
 
 @pytest.fixture

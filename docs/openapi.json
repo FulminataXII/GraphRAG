@@ -1,0 +1,800 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "graphrag",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/healthz": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Healthz",
+        "description": "Liveness: process alive. Always 200 while serving. Performs NO I/O.",
+        "operationId": "healthz_healthz_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Healthz Healthz Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Readyz",
+        "description": "Readiness: concurrent, deadline-bounded backend probes, cached for\n`app.readyz_cache_s` seconds. 503 naming every failing backend when any probe fails.",
+        "operationId": "readyz_readyz_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadyzError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/debug/trail/{cid}": {
+      "get": {
+        "tags": [
+          "debug"
+        ],
+        "summary": "Get Trail",
+        "description": "Admin key required. Returns 404 when `app.env == \"prod\"` or `trail.enabled` is false.",
+        "operationId": "get_trail_v1_debug_trail__cid__get",
+        "parameters": [
+          {
+            "name": "cid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Cid"
+            }
+          },
+          {
+            "name": "Admin-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Admin-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Trail V1 Debug Trail  Cid  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/documents": {
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Create Document",
+        "description": "Multipart upload. Requires `Idempotency-Key`. Validates MIME by CONTENT SNIFFING (never\nthe client-declared `Content-Type`), plus a size cap. Returns 202 `{job_id, doc_id,\ncorrelation_id}` for a new document, or 200 with the SAME shape (no new job) when the\ncontent (by sha256) is already registered \u2014 content-addressing is what makes a re-upload\nunder a different Idempotency-Key still resolve to the original doc_id.",
+        "operationId": "create_document_v1_documents_post",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_create_document_v1_documents_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentJobResponse"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Document already exists (duplicate sha256).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentJobResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/documents/{doc_id}": {
+      "delete": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Delete Document",
+        "description": "Enqueues `DeleteDocument`. Returns 202. Never deletes inline \u2014 see\n`services.ingestion.service.DeletionService`.",
+        "operationId": "delete_document_v1_documents__doc_id__delete",
+        "parameters": [
+          {
+            "name": "doc_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Doc Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentJobResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/jobs/{job_id}": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Get Job",
+        "description": "Job state + document status.",
+        "operationId": "get_job_v1_jobs__job_id__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Job V1 Jobs  Job Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/query": {
+      "post": {
+        "tags": [
+          "query"
+        ],
+        "summary": "Query Sync",
+        "operationId": "query_sync_v1_query_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Bad Gateway (e.g. LLMSchemaViolation)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable (e.g. LLMProviderExhausted)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/query/stream": {
+      "post": {
+        "tags": [
+          "query"
+        ],
+        "summary": "Query Stream",
+        "operationId": "query_stream_v1_query_stream_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Answer": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/Citation"
+            },
+            "type": "array",
+            "title": "Citations"
+          },
+          "confidence": {
+            "type": "number",
+            "title": "Confidence"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text",
+          "citations",
+          "confidence"
+        ],
+        "title": "Answer"
+      },
+      "Body_create_document_v1_documents_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_create_document_v1_documents_post"
+      },
+      "Citation": {
+        "properties": {
+          "chunk_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Chunk Id"
+          },
+          "doc_id": {
+            "type": "string",
+            "title": "Doc Id"
+          },
+          "uri": {
+            "type": "string",
+            "title": "Uri"
+          },
+          "quote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quote"
+          }
+        },
+        "type": "object",
+        "required": [
+          "chunk_id",
+          "doc_id",
+          "uri",
+          "quote"
+        ],
+        "title": "Citation"
+      },
+      "DocumentJobResponse": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "doc_id": {
+            "type": "string",
+            "title": "Doc Id"
+          },
+          "correlation_id": {
+            "type": "string",
+            "title": "Correlation Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "doc_id",
+          "correlation_id"
+        ],
+        "title": "DocumentJobResponse"
+      },
+      "ErrorBody": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "correlation_id": {
+            "type": "string",
+            "title": "Correlation Id"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trace Id"
+          },
+          "retryable": {
+            "type": "boolean",
+            "title": "Retryable"
+          },
+          "details": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Details",
+            "default": {}
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "correlation_id",
+          "trace_id",
+          "retryable"
+        ],
+        "title": "ErrorBody"
+      },
+      "ErrorEnvelope": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorBody"
+          }
+        },
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "title": "ErrorEnvelope"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "QueryRequest": {
+        "properties": {
+          "question": {
+            "type": "string",
+            "title": "Question"
+          },
+          "top_k": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Top K"
+          },
+          "strategy": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "vector",
+                  "graph",
+                  "hybrid"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy"
+          }
+        },
+        "type": "object",
+        "required": [
+          "question"
+        ],
+        "title": "QueryRequest"
+      },
+      "QueryResponse": {
+        "properties": {
+          "answer": {
+            "$ref": "#/components/schemas/Answer"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/Citation"
+            },
+            "type": "array",
+            "title": "Citations"
+          },
+          "route": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoutePlan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "degraded": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Degraded"
+          },
+          "spent": {
+            "$ref": "#/components/schemas/Spend"
+          },
+          "correlation_id": {
+            "type": "string",
+            "title": "Correlation Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "answer",
+          "citations",
+          "route",
+          "degraded",
+          "spent",
+          "correlation_id"
+        ],
+        "title": "QueryResponse"
+      },
+      "ReadyzError": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "not_ready",
+            "title": "Status"
+          },
+          "failing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Failing"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "failing"
+        ],
+        "title": "ReadyzError"
+      },
+      "RoutePlan": {
+        "properties": {
+          "strategy": {
+            "type": "string",
+            "enum": [
+              "vector",
+              "graph",
+              "hybrid"
+            ],
+            "title": "Strategy"
+          },
+          "template": {
+            "type": "string",
+            "title": "Template",
+            "default": "neighbors"
+          },
+          "seed_entities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Seed Entities"
+          },
+          "hops": {
+            "type": "integer",
+            "title": "Hops"
+          },
+          "relation_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relation Type"
+          },
+          "sub_queries": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Sub Queries"
+          },
+          "rationale": {
+            "type": "string",
+            "title": "Rationale"
+          }
+        },
+        "type": "object",
+        "required": [
+          "strategy",
+          "seed_entities",
+          "hops",
+          "sub_queries",
+          "rationale"
+        ],
+        "title": "RoutePlan"
+      },
+      "Spend": {
+        "properties": {
+          "llm_calls": {
+            "type": "integer",
+            "title": "Llm Calls",
+            "default": 0
+          },
+          "tokens": {
+            "type": "integer",
+            "title": "Tokens",
+            "default": 0
+          },
+          "wall_ms": {
+            "type": "integer",
+            "title": "Wall Ms",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "Spend",
+        "description": "Resources ALREADY CONSUMED. Never 'remaining'.\n\nContract:\n    - merge(a, b) is associative and commutative.\n    - llm_calls and tokens aggregate with +; wall_ms aggregates with max (branches\n      overlap)."
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}

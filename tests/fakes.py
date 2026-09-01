@@ -294,7 +294,20 @@ class FakeLLMClient:
 
         repairs = 0
         while queue:
-            item = queue.pop(0)
+            # Find the first item that matches the schema (or is an Exception to simulate repairs)
+            match_idx = -1
+            for i, item in enumerate(queue):
+                if isinstance(item, (Exception, schema)):
+                    match_idx = i
+                    break
+
+            if match_idx == -1:
+                raise LLMSchemaViolation(
+                    f"FakeLLMClient exhausted scripted responses for role={role} matching schema {schema}"
+                )
+
+            item = queue.pop(match_idx)
+
             if isinstance(item, Exception):
                 repairs += 1
                 if repairs > max_repairs:
