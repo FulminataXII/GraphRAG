@@ -831,8 +831,13 @@ than any feature in the repo.
   consumes lives), and a **separate** `neo4j-test` container on port 7688 that `make test-int`
   starts and `make up` does not. Neo4j needs its own instance rather than its own database
   because Community Edition supports exactly one. `tests/integration/test_isolation_guard.py`
-  asserts all four differ from what `config/base.yaml` and `.env` resolve to, so the day someone
-  points a fixture back at production, a test says so instead of a corpus quietly emptying.
+  asserts all four differ from what `config/base.yaml` and `.env` resolve to, and
+  `tests/unit/test_integration_isolation.py` (no containers, so `make test` catches it too)
+  feeds each destructive guard a fabricated production value and asserts it refuses — so the day
+  someone points a fixture back at production, a test says so instead of a corpus quietly
+  emptying. Verify those guards that way and only that way: aiming a live fixture at a real
+  store to watch it refuse is how the real `chunks` and `entities` collections were once
+  deleted.
   Run the suite through `make test-int`, not a bare `pytest -m integration`: the make target is
   what starts `neo4j-test`. (A bare run fails with a message telling you this, rather than
   falling back to 7687.)

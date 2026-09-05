@@ -6,13 +6,17 @@ Everything here is derived from configuration — `config/base.yaml` + `config/l
 names. A list would have to be updated by the same person who just renamed something, which is
 precisely when nobody remembers to.
 
-Three layers, because "different names" alone is not the requirement:
+Two layers here, because "different names" alone is not the requirement:
 
   1. every namespace the test config yields differs from the one production's config yields;
   2. the live fixtures actually connect to those namespaces (a correct constant that no fixture
-     reads would prove nothing);
-  3. the destructive helpers REFUSE a production name when handed one directly, so a future
-     fixture that resolves wrongly fails loudly instead of deleting a corpus.
+     reads would prove nothing).
+
+The third layer — that the destructive helpers REFUSE a production name when handed one — is
+NOT here, and deliberately not: proving a destructive guard by aiming it at a real store is how
+the real `chunks` and `entities` collections got deleted once already. It lives in
+`tests/unit/test_integration_isolation.py`, which feeds `namespaces.check_*` fabricated
+production values with nothing connected. Do not reintroduce a live version of it.
 """
 
 from __future__ import annotations
@@ -28,7 +32,6 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from graphrag.config.settings import Settings
 from tests.integration import namespaces as ns
-from tests.integration.conftest import drop_collections
 
 pytestmark = pytest.mark.integration
 
@@ -166,15 +169,3 @@ async def test_no_production_collection_exists_under_the_run_prefix(
         production.resolution.collection,
     }:
         assert not ns.owned_collection(name)
-
-
-# ---------------------------------------------------------------------------
-# 3. the destructive helpers refuse a production name
-# ---------------------------------------------------------------------------
-async def test_drop_collections_refuses_a_production_name(production: Settings) -> None:
-    client = AsyncQdrantClient(url=production.stores.qdrant.url, prefer_grpc=False, timeout=10)
-    try:
-        with pytest.raises(AssertionError, match="not a collection this run created"):
-            await drop_collections(client, production.retrieval.vector.collection)
-    finally:
-        await client.close()

@@ -36,6 +36,7 @@ import uuid
 from functools import cache
 from pathlib import Path
 from typing import Final
+from urllib.parse import urlparse
 
 from pydantic import SecretStr
 
@@ -119,26 +120,85 @@ if not RUN_ID or _COLLECTION_PREFIX in ("", "test_"):  # pragma: no cover — an
     )
 
 
+class ProductionNamespaceError(AssertionError):
+    """A destructive test helper was aimed at a store production uses.
+
+    An `AssertionError` subclass so it reads like the failed precondition it is, and so
+    `pytest.raises(AssertionError)` keeps working.
+    """
+
+
 @cache
+def production_settings() -> Settings:
+    """What a NON-test process on this host resolves to.
+
+    Cached because the guards below consult it on every call. `cache_clear()` before using it
+    from a context that supplies different secrets — `tests/unit/test_integration_isolation.py`
+    does exactly that.
+    """
+    return Settings()
+
+
 def production_collections() -> frozenset[str]:
-    """The Qdrant collections a NON-test process resolves to, read from the same config it
-    reads. Not a hardcoded pair: renaming `retrieval.vector.collection` must move this too."""
-    base = Settings()
+    """The Qdrant collections production resolves to, read from the same config it reads. Not a
+    hardcoded pair: renaming `retrieval.vector.collection` must move this too."""
+    base = production_settings()
     return frozenset({base.retrieval.vector.collection, base.resolution.collection})
 
 
 def owned_collection(name: str) -> bool:
-    """True only for names this module minted. The delete path checks it, so a fixture handed
-    the wrong name deletes nothing instead of deleting the corpus.
+    """True only for names this module minted.
 
     Two independent conditions, because one is not enough. A prefix test alone is only as strong
-    as the prefix: with `_COLLECTION_PREFIX` degenerated to `""` this returns True for every
-    name in the store, and the assertion that is supposed to refuse `chunks` waves it through —
-    which is exactly how a deliberate sabotage of this module deleted the real `chunks` and
-    `entities` collections while "proving" the guard worked. The import-time invariant above
-    makes that particular degeneration impossible; the config lookup below makes the production
-    names unusable no matter what the prefix says."""
+    as the prefix: degenerate `_COLLECTION_PREFIX` to `""` and this returns True for every name
+    in the store, so the check that should refuse `chunks` waves it through. The import-time
+    invariant above makes that degeneration impossible; the config lookup makes the production
+    names unusable regardless of what the prefix says.
+    """
     return name.startswith(_COLLECTION_PREFIX) and name not in production_collections()
+
+
+# --- preconditions for the destructive helpers -------------------------------------------------
+# Named functions rather than inline asserts in the fixtures, so they can be exercised with
+# fabricated production values and nothing at risk. `tests/unit/test_integration_isolation.py`
+# is that exercise; NEVER verify one of these by pointing a live fixture at a real store.
+
+
+def check_collection(name: str) -> None:
+    """Precondition for deleting a Qdrant collection."""
+    if not owned_collection(name):
+        raise ProductionNamespaceError(
+            f"refusing to delete {name!r}: not a collection this run created "
+            f"(prefix {_COLLECTION_PREFIX!r}, production {sorted(production_collections())})"
+        )
+
+
+def check_database(name: str) -> None:
+    """Precondition for CREATE/DROP DATABASE."""
+    if name == PRODUCTION_POSTGRES_DB or not name.startswith("graphrag_test_"):
+        raise ProductionNamespaceError(
+            f"refusing to create or drop database {name!r}: production is "
+            f"{PRODUCTION_POSTGRES_DB!r}"
+        )
+
+
+def check_redis_db(index: int) -> None:
+    """Precondition for `flushdb`. Production's index comes from config, not the constant —
+    moving `stores.redis.url` to another db must move what this refuses."""
+    production_index = int(urlparse(production_settings().stores.redis.url).path.lstrip("/") or 0)
+    if index in (production_index, PRODUCTION_REDIS_DB_INDEX):
+        raise ProductionNamespaceError(
+            f"refusing to flush redis db {index}: production is db {production_index}"
+        )
+
+
+def check_neo4j_uri(uri: str) -> None:
+    """Precondition for `MATCH (n) DETACH DELETE n`. Community Edition has one database, so the
+    port is the only thing separating this run's graph from the corpus."""
+    if urlparse(uri).port == urlparse(production_settings().stores.neo4j.uri).port:
+        raise ProductionNamespaceError(
+            f"refusing to wipe {uri}: that is the production Neo4j instance"
+        )
 
 
 def namespaced(base: Settings, *, local: str = "") -> Settings:

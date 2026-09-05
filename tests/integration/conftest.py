@@ -72,9 +72,7 @@ async def drop_collections(client: AsyncQdrantClient, *names: str) -> None:
     a fixture that somehow resolved to `chunks` deletes nothing and says so, instead of dropping
     the corpus. Qdrant is where the original incident left 129 orphaned points."""
     for name in names:
-        assert ns.owned_collection(name), (
-            f"refusing to delete {name!r}: not a collection this run created"
-        )
+        ns.check_collection(name)
         with contextlib.suppress(Exception):
             await client.delete_collection(name)
 
@@ -122,10 +120,7 @@ def _pg_database() -> Iterator[str]:
     """CREATE the per-run database, migrate it, DROP it. Session-scoped and synchronous: the
     per-test fixtures below each open their own engine in their own event loop, so nothing
     created here is ever handed across loops."""
-    assert ns.POSTGRES_TEST_DB != ns.PRODUCTION_POSTGRES_DB, (
-        f"the per-run database resolved to the production one ({ns.POSTGRES_TEST_DB}); "
-        "refusing to create or drop it"
-    )
+    ns.check_database(ns.POSTGRES_TEST_DB)
     asyncio.run(_admin_execute(f'DROP DATABASE IF EXISTS "{ns.POSTGRES_TEST_DB}" WITH (FORCE)'))
     asyncio.run(_admin_execute(f'CREATE DATABASE "{ns.POSTGRES_TEST_DB}"'))
     try:
@@ -174,10 +169,7 @@ async def redis_client() -> AsyncIterator[Redis]:
     yield client
     # `flushdb` is why the index matters: on db 0 it wipes the arq queue the running worker is
     # consuming, plus every cached embedding. Assert rather than trust the URL.
-    db_index = client.connection_pool.connection_kwargs.get("db", 0)
-    assert db_index != ns.PRODUCTION_REDIS_DB_INDEX, (
-        f"redis_client resolved to db {db_index}, which is production's; refusing to flush"
-    )
+    ns.check_redis_db(int(client.connection_pool.connection_kwargs.get("db", 0)))
     await client.flushdb()
     await client.aclose()
 
@@ -211,6 +203,7 @@ async def clean_neo4j(neo4j_driver: AsyncDriver) -> AsyncIterator[AsyncDriver]:
     container, which nothing but this suite ever writes to."""
 
     async def _wipe() -> None:
+        ns.check_neo4j_uri(ns.NEO4J_URI)
         await neo4j_driver.execute_query("MATCH (n) DETACH DELETE n", database_="neo4j")
 
     await _wipe()
@@ -246,7 +239,7 @@ async def _sweep() -> None:
     finally:
         await client.close()
 
-    assert ns.REDIS_DB_INDEX != ns.PRODUCTION_REDIS_DB_INDEX
+    ns.check_redis_db(ns.REDIS_DB_INDEX)
     redis = Redis.from_url(ns.REDIS_URL)
     try:
         await redis.flushdb()
