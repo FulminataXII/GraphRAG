@@ -27,8 +27,9 @@ model_list:
 
   - model_name: bulk-high-tpm
     litellm_params:
-      model: gemini/gemini-3.5-flash-lite
+      model: gemini/gemini-3.5-flash
       api_key: os.environ/GEMINI_API_KEY_1
+      reasoning_effort: low
       rpm: 15
       tpm: 1000000
 

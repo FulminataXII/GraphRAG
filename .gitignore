@@ -2,6 +2,7 @@
 .venv/
 .debug/
 __pycache__/
+prompt-audit.md
 *.pyc
 .mypy_cache/
 .ruff_cache/

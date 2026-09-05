@@ -1046,6 +1046,453 @@ is still `api`'s `start_period`.
 
 ---
 
+## Ingestion failing with `MAX_TOKENS` — diagnosed, BO-10 era
+
+### What happened
+
+The model hit its output ceiling and stopped mid-JSON. Not a provider error, not quota — the call
+succeeded, the answer got cut off. For extraction that's worse than a clean failure: truncated JSON
+is invalid, which triggers a repair attempt, which makes a **second** full-price call that truncates
+the same way. Every failure cost roughly double.
+
+### The evidence, and how to read it
+
+From a Phoenix trace, `llm.gemini.usageMetadata` on a failing extraction:
+
+```
+promptTokenCount:     4828
+candidatesTokenCount: 11985
+totalTokenCount:      16813
+```
+
+Two things fall out of those three numbers.
+
+**`4828 + 11985 = 16813` exactly.** The total is fully accounted for by prompt plus output, which
+means `thoughtsTokenCount` was zero. Thinking was consuming nothing. `reasoning_effort: low` on
+`bulk-high-tpm` had already done its job — that fix worked and is not the remaining problem.
+
+**`candidatesTokenCount: 11985` against a 12000 ceiling** is a clean truncation. The model stopped
+because it ran out of room, not because it finished. And since thinking was zero, all ~12k was
+legitimate extraction JSON.
+
+That's the diagnostic worth reusing: when a Gemini call fails this way, add prompt + candidates and
+compare to total. If they match, thinking isn't your problem and the output is genuinely too big. If
+total is larger, the difference is thinking and `reasoning_effort` is the lever.
+
+### Why 12000 wasn't enough
+
+`llm.batching.bulk_chunks_per_request` is 20, and one ceiling covers the JSON for the whole batch.
+At ~600 tokens of output per chunk — driven mostly by `RelationOut.evidence_span`, capped at 500
+characters, roughly 125 tokens each — twenty chunks is ~12,000 tokens of entirely correct output.
+The batch size and the ceiling were set at different times and never reconciled.
+
+### The fix
+
+**You do not need to cap this.** `max_tokens` is a ceiling, not a reservation: you're billed for
+tokens actually generated, so a request needing 3k costs the same whether the limit is 4k or 40k. A
+low ceiling on the bulk role buys nothing and costs truncated responses plus doubled repair calls.
+
+`gemini-3.5-flash` supports 65,536 output tokens. In `config/base.yaml`:
+
+```yaml
+    # bulk covers ALL bulk_chunks_per_request chunks of extraction JSON in ONE response.
+    # Measured: 20 chunks produced 11,985 output tokens and truncated at a 12000 ceiling
+    # (thinking was 0 — reasoning_effort: low is set on bulk-high-tpm in litellm/config.yaml).
+    # 32000 leaves real headroom under the model's 65,536 max. max_tokens is a ceiling, not a
+    # reservation — you are billed for what is generated, so a generous value costs nothing.
+    bulk:    { model: bulk-high-tpm,    temperature: 0.1, max_tokens: 32000 }
+```
+
+Leave the other four roles alone. `router` at 400 and `grader` at 300 are correct — those return
+tiny structured verdicts, and a low ceiling there is a genuine runaway guard.
+
+**Mirror it into `config.example.yaml`**, which still says 2000. That file is the template every
+future reader trusts; leaving it stale means the next person re-derives this from scratch.
+
+### Which file, and why it matters
+
+`max_tokens` belongs in `config/base.yaml`, app-side. `reasoning_effort` belongs in
+`litellm/config.yaml`. They look similar and they are not:
+
+- `reasoning_effort` is a property of the concrete provider deployment — same category as `model:`
+  itself. It goes on the alias.
+- `max_tokens` is a per-role semantic choice. Five roles share four aliases, so putting it on the
+  alias would silently apply one role's ceiling to another role's calls.
+
+`config/base.yaml` is baked into the app, so this needs a restart:
+
+```bash
+docker compose restart worker projection-worker api
+docker compose ps --all
+```
+
+### Verify on one document first
+
+```bash
+docker compose logs -f worker
+```
+
+Re-run ingestion on a **single** document and confirm a clean extraction with no `MAX_TOKENS` before
+re-running the corpus. A wrong value costs twelve documents of quota to discover.
+
+### If it still truncates
+
+Then the batch is genuinely too big for one response and the lever is batch size, not the ceiling.
+Lower `bulk_chunks_per_request` from 20 to 10.
+
+**Understand the trade-off first.** The bulk role is RPM-bound, not TPM-bound — the binding
+constraint is requests per minute. Halving the batch doubles the request count, moving you toward
+the ceiling batching existed to avoid. So raise `max_tokens` first, because it's free; cut batch size
+only if that genuinely isn't enough.
+
+A third option if both feel tight: shorten `RelationOut.evidence_span`'s 500-character cap, the
+single largest contributor to output size. That's a BLUEPRINT change with real consequences for
+citation quality — raise it with the reviewer, don't edit it directly.
+
+### Watch afterwards
+
+A higher ceiling means successful calls generate more tokens than before, so token throughput rises
+even though request count doesn't. If Gemini free-tier TPM starts biting you'll see 429s where you
+previously saw `MAX_TOKENS`. That's progress, not regression — but it's a different fix, and the
+answer there is smaller batches, not a smaller ceiling.
+
+One open question worth asking Claude Code: ~600 output tokens per chunk is high. It may be correct
+for dense press releases, or it may mean the extraction prompt is over-extracting — pulling
+low-confidence entities and relations that resolution will discard anyway. Worth a look before
+BO-11, since it's paid for on every ingestion.
+
+---
+
+## Tuning judge (OpenRouter GLM) and synth (Gemini 3.1 Pro) before BO-11
+
+Good instinct to tune this before M-5/BO-11: evaluating against a golden set while the judge role
+is silently running on the wrong model, or synth is timing out on half its calls, would waste the
+golden-set effort measuring noise instead of real quality. Two separate problems, two separate
+fixes.
+
+### Judge (OpenRouter GLM): reasoning tokens, same failure shape as the Gemini bulk fix
+
+What you read off OpenRouter's logs — 500 configured, ~200 taken by "the provider," ~300 left —
+is almost certainly **reasoning tokens**, the same mechanism that broke bulk extraction, just on a
+different provider. OpenRouter normalizes a `reasoning` parameter across providers specifically
+because many models (including GLM) default to a hidden "thinking" pass that draws from the same
+token ceiling as the visible output. GLM models specifically expose this as a plain
+**`reasoning.enabled` boolean** (not a graduated effort level like Gemini's) — confirmed on
+OpenRouter's own model page for the GLM family. Unlike Gemini's fixed percentage, GLM's thinking
+pass generates however many tokens the question seems to need, so "200 out of 500" is just what
+happened on that particular call, not a fixed proportion — the next call could take more or less.
+
+**The fix**, mirroring what worked for bulk:
+
+```yaml
+# litellm/config.yaml, on the judge-alt-vendor deployment's litellm_params
+model_list:
+  - model_name: judge-alt-vendor
+    litellm_params:
+      model: openrouter/<the exact model string configured>
+      reasoning:
+        enabled: false
+```
+
+Verify this actually lands — pass-through of provider-specific params through LiteLLM to
+OpenRouter isn't guaranteed for every field, so confirm the same way you confirmed the Gemini fix:
+send one call, check the response's `usage` for a `reasoning_tokens` field or gap between
+`completion_tokens` and visible content. If `reasoning.enabled: false` isn't honored, raise
+`max_tokens` for the judge role instead (same "it's a ceiling, not a reservation" logic — the judge
+only returns a small `Entailment` verdict, so there's no downside to a generous ceiling here either,
+unlike `router`/`grader` where a small ceiling is a genuine guard).
+
+### The 429s — check the error body, and consider the mundane explanation first
+
+A 429 from OpenRouter's own docs specifies which limit was hit — requests-per-minute,
+requests-per-day, or tokens-per-minute — in the response body, not just the status code. Look at
+the actual message before assuming which one it is:
+
+```bash
+docker compose logs --tail=100 litellm | grep -A5 "429"
+```
+
+Before reaching for a config fix: you've been manually firing test queries in quick succession
+while debugging, and every truncation-triggered repair is a second full call. Rapid manual testing
+plus doubled calls from the reasoning-token problem above is often enough to trip a low free-tier
+RPM ceiling on its own, with nothing else wrong. Fix the reasoning-token issue first, then re-test
+at a normal pace before concluding the rate limit itself needs a structural fix (spacing out calls,
+or checking the specific GLM variant's actual free-tier RPM on OpenRouter's model page — free tiers
+vary model to model, the same way Groq's is a flat 8000 TPM per organisation).
+
+### Synth (`gemini-3.1-pro-preview`): this one may not be fixable from your side
+
+This is different in kind from the judge issue. `gemini-3.1-pro-preview` has a well-documented
+history of transient Google-side capacity rejections — `429 RESOURCE_EXHAUSTED`, `503` "experiencing
+high demand" — recurring for months after release, independent of any caller's config, quota, or
+key. Your own observation fits that pattern exactly: Google AI Studio's dashboard shows failed
+requests but **zero usage** under this model for your dedicated key — consistent with requests
+being rejected before the model ever starts, which is what capacity-based rejection looks like from
+the outside. This is very likely not a bug in your setup.
+
+Two real options, and this is your call, not a config tweak:
+
+1. **Keep it and absorb the flakiness.** `num_retries: 2` plus the fallback to `judge-alt-vendor`
+   already exist for exactly this. Once judge-alt-vendor's own reasoning-token issue is fixed, the
+   fallback chain should work as designed when synth's primary is unavailable — you'd get a slightly
+   lower-quality answer on those calls, but a working one.
+2. **Switch synth to `gemini-3.5-flash`.** At least one independent model-status tracker has
+   explicitly suggested exactly this swap when `gemini-3.1-pro-preview` shows concurrency problems.
+   The real cost: `bulk` already uses a Gemini Flash-family model (§4 of `HANDOFF.md` — pending your
+   flash-vs-flash-lite decision there too), so this would mean two roles sharing very similar
+   underlying capability rather than a distinct "quality" tier for synthesis. That's a real
+   trade-off on answer quality, not a free win — decide it deliberately, the same way you're holding
+   off on the flash/flash-lite call for bulk.
+
+If you decide to switch, say so and I'll fold it into the spec (`HANDOFF.md` §4 and the aliasing
+note) rather than leaving the stale model name for the next person to trip on.
+
+---
+
+## Router chose "graph" for a narrative question — resolved with real evidence
+
+### What you found, and where I was wrong
+
+Earlier I offered three possible mechanisms for why `strategy: graph` missed the 1997-losses
+narrative. You've now tested this directly, and the evidence changes the picture:
+
+- **Only one document was ingested.** My "per-hop cap crowds it out on a busy 12-document hub"
+  hypothesis cannot be the cause here — there's no hub to be crowded on a single document. That
+  guess was wrong; I'm retracting it. (It's not permanently wrong — once the corpus scales back up
+  to the full 12 documents, a busy Apple hub competing for the top-25-per-hop slots becomes a real
+  risk again. Worth re-testing this specific query once more documents are back in, not assuming
+  it's resolved for good.)
+- **Forcing `strategy: vector` produced an excellent, well-cited answer** — Jobs' return, the NeXT
+  acquisition, Microsoft's $150M investment, ending clone licensing, the Power Computing purchase,
+  the online store, the product-line cuts, and the $309M year-end profit, cited to five real chunks.
+  This directly confirms the mechanism that matters: choosing `graph` alone forecloses
+  `retrieve_vector` entirely, and vector alone had everything needed. That part of the original
+  diagnosis holds and is now proven, not just theorized.
+- **`NeXT` is in the graph.** You found the edge yourself: *"Apple instead acquired NeXT, the
+  company founded by Steve Jobs, for its NeXTSTEP operating system."* — a real, correctly-extracted
+  relation. But its evidence text is narrowly about *why* NeXT was chosen (the NeXTSTEP OS), not the
+  surrounding narrative about the 1997 losses or the comeback products. That's a **different
+  sentence, a different chunk** than the one carrying the losses/iMac/iPod narrative. A graph
+  traversal that finds this edge and hydrates its chunk gets the acquisition rationale, correctly —
+  it was never going to reach the other chunk unless *that* chunk also produced an edge reachable
+  from "Apple."
+
+So the precise gap: the sentence *"Under his leadership, Apple returned to profitability through
+the iMac, iPod, iPhone, and iPad…"* most likely never produced its own `Apple → CREATED/LAUNCHED →
+{iMac, iPod, iPhone, iPad}` relations at all. And *"Apple was reporting major losses"* has no
+natural two-entity relation to become — a loss is a fact about one entity, not a link between two.
+
+### Your instinct about graph bloat is correct — don't fix this by extracting more
+
+You asked: if every small fact got extracted as an entity/relation, wouldn't the graph get bloated?
+Yes, and that's the right frame for the decision here. Forcing extraction to capture every
+distributively-listed product mention or every monadic financial fact fights what a relational
+graph is good at (crisp, binary, lookup-style facts) and duplicates what vector search already
+does better, as your own test just proved. **Don't ask Claude Code to make extraction more
+exhaustive to catch this class of fact.** It would cost more tokens per batch (the same ceiling
+tension as bulk's `MAX_TOKENS` problem) for coverage vector search already provides directly from
+raw text.
+
+### The fix is on the router side — and given the evidence, worth doing now, not waiting for M-5
+
+Last time I said not to patch the router prompt off one anecdote, and I'm updating that now that
+you've actually established *why* it fails, not just *that* it failed once. This isn't corpus-
+specific overfitting anymore — it's a general property: an open-ended "how/why did X do Y" question
+about a process or history needs the connecting narrative prose, which lives in chunk text, not in
+discrete relation triples. That reasoning holds regardless of which document or corpus you're
+querying.
+
+**Still add the query to the M-5 golden set** — as a regression check, not as the sole evidence for
+the fix. And this belongs in a **Claude Code prompt**, not a config edit: prompt template wording is
+a BO-06 build artifact Claude Code owns, not something to hand-edit directly. When you're ready, I
+can draft a short, scoped prompt asking it to add router-prompt guidance and a contrasting few-shot
+example (narrow relational lookup → graph; open-ended narrative/causal → hybrid), without touching
+anything else in the orchestration pipeline.
+
+### One thing that went right, worth noticing
+
+When graph-only retrieval was inadequate, the pipeline didn't hallucinate — it returned "insufficient
+context," the `insufficient` node's designed refusal path (HTTP 200, not an error). That's
+`verify_grounded`/the self-correction design working as intended even while retrieval itself picked
+the wrong strategy. The bug is in routing, not in groundedness — worth keeping that distinction
+clear when you write this up for M-5 or a resume/portfolio description.
+
+---
+
+## Debugging one request end-to-end — you already have this tool
+
+### Use the CLI, not the HTTP endpoint
+
+`graphrag trail <correlation_id>` is the single point of source you're asking for. Built in BO-02,
+gate-tested by `test_trail_cli_roundtrip`:
+
+```bash
+graphrag trail 01M1KKNWKA43CWBTHRTBH6Z4EA
+# writes debug_bundle_01M1KKNWKA43CWBTHRTBH6Z4EA.md in the working directory
+```
+
+Every query response returns its `correlation_id` at the top level — the one in your last vector
+query was `01M1KKNWKA43CWBTHRTBH6Z4EA`. The bundle contains spans and log lines **merged into one
+timestamp-ordered sequence**, secrets redacted, each field truncated to
+`observability.trail.truncate_field_chars`. That is the node-by-node story of one request: which
+nodes ran, in what order, what each returned, where it failed.
+
+**`GET /v1/debug/trail/{cid}` returns `{}`.** BO-10 implemented only its auth and env gating; the
+lookup itself was left a stub. Don't use it — that's on me, I gave you that curl command in the
+previous round knowing the stub was recorded. Wiring it to the existing `TrailBuilder` is a small
+follow-up, not new work.
+
+If the bundle comes back empty, that's a known-shape failure with a documented cause: the Loki
+label is `service_name`, not `service` (Loki's OTLP path replaces the dot in `service.name` with an
+underscore), and an empty bundle looks identical to "logs were never exported." BLUEPRINT §4.6
+spells this out.
+
+### What the trail can't tell you yet, and the fix
+
+The trail answers "what happened in my app." It cannot answer **"why did the gateway fall back."**
+
+Your app span records `llm.role`, `llm.alias`, `llm.model_served` — so you can see that a call meant
+for `synth-quality` was served by Groq. But the *reason* (a 429 from Google, a 503, a timeout)
+happens inside LiteLLM, and LiteLLM's logs aren't in the Loki/Tempo stream the trail queries. Two
+systems, no join key. That's the gap you're feeling, and it's real — not you misreading the tools.
+
+**The join key already exists in this codebase.** `x-litellm-trace-id` → `session_id` is the exact
+mechanism that fixed `test_cost_tracked` at BO-06. Send the request's `correlation_id` as that
+header on every gateway call, and LiteLLM stores it in the `session_id` column of
+`LiteLLM_SpendLogs`. Then one ID retrieves both halves: the app's node sequence from the trail, and
+every gateway attempt — including failed ones, with `attempted_fallbacks` and `original_model_group`
+— from `/spend/logs`.
+
+That is a genuine spec gap, not a Claude Code error. Nothing in BLUEPRINT ever asked for the
+correlation ID to be propagated to the gateway. Worth fixing as a small scoped change alongside
+wiring the endpoint: it converts fallback debugging from "dig through Phoenix attributes and guess"
+to one lookup.
+
+### Meanwhile, the fastest manual path
+
+Until that lands, two commands answer most of it:
+
+```bash
+graphrag trail <cid>                       # what your app did
+docker compose logs --tail=200 litellm | grep -i "fallback\|429\|503"   # why the gateway switched
+```
+
+---
+
+## Why you can't test one module at a time — and what's missing
+
+### The design supports it; the tooling was never specified
+
+The architecture is genuinely componentised. Every orchestration node is
+`async def node(state: QueryState, deps: NodeDeps) -> dict[str, Any]` — it takes state, returns a
+partial update, mutates nothing. BLUEPRINT §6.6 states outright that each is independently
+unit-testable with a hand-built state. Retrieval, resolution, and the graph store all sit behind
+Protocol ports, so any one can be exercised against real backends without the rest of the pipeline.
+
+So the separation you're asking for is already in the code. What's missing is an **entry point** —
+a way for *you* to run one node, by hand, with your own question and context, and see what it
+returns. Unit tests exercise these components, but they're written for CI, not for a human iterating
+on a prompt.
+
+**That's a real gap in my spec work, not a Claude Code failure.** I specified the components as
+independently testable and never specified the harness that makes that property usable by a person.
+
+### What to ask for
+
+A `graphrag node` CLI command, added to the existing Typer app in `apps/cli/main.py` (which already
+hosts `trail`, and which BO-05 and BO-11 were always going to extend):
+
+```bash
+graphrag node plan_route --question "How did Apple manage its losses in 1997?"
+graphrag node grade_context --question "..." --chunks-from <cid>
+graphrag node generate --question "..." --chunks-from <cid>
+```
+
+Each constructs a minimal `QueryState`, runs exactly one node against real `NodeDeps`, and prints
+the returned partial update plus the LLM call it made. `--chunks-from <cid>` reuses the retrieved
+context from a previous real query, so you can iterate on the `generate` prompt without re-running
+retrieval and re-spending quota every time.
+
+This is the tool that makes golden-set work tractable. Tuning a router prompt by running full
+end-to-end queries costs four LLM calls and ~25 seconds each; running `plan_route` alone costs one
+call and about a second. Worth building **before** M-5, not after — it's the difference between
+tuning against 50 golden items being an afternoon or a week.
+
+---
+
+## Always-hybrid: an honest critique, and the version of it I'd actually ship
+
+Your argument: making every query hybrid means that however dense or sparse the graph is, you never
+lose vector search's advantages. That's largely right, and the failure you found is real evidence
+for it. Here's the honest case against, so you can decide on the strongest version of both sides.
+
+### Arguments against always-hybrid
+
+**1. RRF dilution — the strongest objection.** `fuse` converts `GraphPath`s to `ScoredChunk`s and
+applies reciprocal rank fusion. RRF is rank-based, so *every* list contributes ranks regardless of
+quality. On a purely semantic question the graph will still return *something* — its top paths from
+whatever entities got linked — and those ranks push genuinely good vector chunks down. Graph-only
+fails loudly (you saw it: an honest refusal). Hybrid fails quietly, by making a good answer slightly
+worse, which is much harder to detect and exactly what a golden set is for.
+
+**2. Grader cost is real, unlike retrieval cost.** Retrieval itself is cheap — Qdrant and Neo4j, no
+tokens, and `retrieve_vector`/`retrieve_graph` fan out in parallel, so wall time is roughly the max
+of the two rather than the sum. But `grade_context` batches over the *fused* set at
+`orchestration.grader.batch_size: 8`. A bigger fused set means more grader batches, and grading is
+LLM calls. Always-hybrid raises token spend on every query, on free tiers you're already hitting
+ceilings on.
+
+**3. You lose the diagnostic signal.** If strategy is always hybrid, `plan_route`'s `strategy`
+output becomes vestigial. Right now, when retrieval goes wrong, the plan tells you what the router
+believed — that's how you found this problem in the first place. Hardwiring hybrid removes the
+evidence that lets you notice the next miscalibration.
+
+**4. It makes routing unmeasurable, right before you build the thing that measures it.** BO-11's
+evaluation harness is meant to score retrieval quality. If every query takes the same path, there's
+nothing left to evaluate about routing — you'd be removing a variable one stage before the tooling
+that could tell you whether it was worth keeping.
+
+**5. Portfolio framing.** "Self-correcting pipeline that routes queries by shape" is a stronger
+claim in an interview than "we always run both and fuse." That's not a technical argument and
+shouldn't outweigh one, but this is a CV project and it's worth naming rather than pretending it
+isn't a consideration.
+
+### What I'd actually ship: ban graph-only, keep the other two
+
+The failure you hit was **graph-only**, not "insufficiently hybrid." Look at the asymmetry:
+
+- `vector` alone: works well on this corpus, cheap, one backend. Your own test proved it produces a
+  fully-cited, high-quality answer.
+- `hybrid`: safe default, slightly more expensive, some dilution risk.
+- `graph` alone: **can catastrophically fail** — it forecloses the retrieval path that had the
+  answer, and the only recovery is an honest refusal.
+
+Graph-only is the sole strategy with a catastrophic failure mode, because it's the only one that
+excludes the general-purpose retrieval method. Vector-only is a *safe* narrowing; graph-only is a
+*dangerous* one.
+
+So: make `graph` unreachable as a terminal strategy — the router may choose `vector` or `hybrid`,
+and anything it would have routed to `graph` becomes `hybrid`. You keep the routing signal, keep
+cheap vector-only for straightforward semantic questions, and eliminate the one path that can lose
+the answer outright. `orchestration.default_strategy` is already `hybrid`, so the fail-open behaviour
+is unchanged.
+
+This is a smaller change than always-hybrid, removes the same failure mode, and — unlike
+always-hybrid — leaves BO-11 something to measure.
+
+### Either way, measure it rather than deciding it permanently
+
+Once the golden set exists, this is a directly measurable question: run the 50 items under
+always-hybrid, under routed-with-graph-banned, and under the current routing, and compare retrieval
+quality and token spend. That's a genuinely strong thing to have measured and written up — "we
+tested three routing policies against a golden set and chose on evidence" is a much better story
+than either policy chosen on argument alone.
+
+Ban graph-only now, because the failure mode is proven and the fix is cheap. Hold always-hybrid as a
+measured comparison for BO-11 rather than a decision made today.
+
+---
+
 ## Known issue — the worker can wedge and stay wedged
 
 Seen once during BO-06: `test_stack_healthy` failed because the `worker` container had been
@@ -1219,3 +1666,69 @@ LF. Reserve pasted heredocs for cases where you'll check with `file` afterwards.
 | Container restarts with empty logs, exit code 137 | OOMKilled. `docker inspect --format='{{.State.OOMKilled}}' <name>` confirms it. Raise `mem_limit`; see trap 5 |
 | Integration test can't find `docker-compose.yml` | A test fixture chdir'd away from the repo root. Isolation fixtures must skip tests marked `integration` |
 | Integration tests hit the wrong containers | **Git worktrees each get their own Compose project namespace**, derived from the directory name. `docker compose stop qdrant` in a worktree stops `<worktree>-qdrant-1`, not the `graphrag-qdrant-1` your running `api` is talking to — so the test "stops" a container nothing uses and the assertion fails for a reason that looks like a code bug. Run integration tests from the main checkout, or set `COMPOSE_PROJECT_NAME=graphrag` in the worktree. Check with `docker compose ps --all` and confirm the container name prefix |
+
+## Command reference: docker and git
+
+Reference only — for the *why* behind any of these, see the Docker traps and Git sections above.
+These are the ones that have actually earned their keep during review, not a generic cheat sheet.
+
+### Docker: inspecting a running or misbehaving stack
+
+```bash
+docker compose ps --all                          # ALWAYS --all; plain ps hides crashed containers
+docker compose logs <service> --tail=80           # last N lines, no follow
+docker compose logs <service> --tail=5 -f         # live tail — leave running ~30s to tell hung from quiet
+docker compose exec <service> sh -c '<cmd>'        # run something inside a container
+docker top <container-name>                        # host-side process list — works even with no shell tools installed in the image
+docker stats --no-stream <container> [<container>...]   # one-shot CPU/mem snapshot, not the live dashboard
+docker inspect <container> --format='{{json .State.Health}}' | python3 -m json.tool
+                                                    # full healthcheck log: exit codes, timing, output —
+                                                    # docker compose ps only shows the current status word
+docker inspect --format='{{.State.OOMKilled}}' <container>   # true = killed for exceeding mem_limit, not a code crash
+```
+
+Timing a command inside a container — `time` often isn't installed in slim images; bracket with `date` instead:
+```bash
+docker compose exec <service> sh -c 'date +%s.%N; <cmd>; echo "exit:$?"; date +%s.%N'
+```
+
+### Docker: Redis, when debugging arq/queue state
+
+```bash
+docker compose exec redis redis-cli KEYS "<pattern>"       # exact pattern match — easy to guess wrong
+docker compose exec redis redis-cli --scan --pattern "*<term>*"   # broader, safer first pass — use this before KEYS
+docker compose exec redis redis-cli GET "<key>"
+docker compose exec redis redis-cli TTL "<key>"             # -2 = key doesn't exist, -1 = exists with no expiry
+docker compose exec redis redis-cli LLEN "<queue-key>"      # queue backlog depth
+```
+
+### Docker: recovering from a wedged service
+
+```bash
+docker compose restart <service> [<service>...]   # first thing to try
+docker compose rm -f <service> && docker compose up -d <service>   # WSL2 fallback if restart hits a stale bind-mount error
+```
+
+### Git: history and diffing, beyond the basic loop in "Git, and the worktree trap" above
+
+```bash
+git log --oneline -5                                       # recent commits
+git log -p -- <path>                                       # every commit that ever touched a file, with full diffs —
+                                                              # THE tool for "did X always work this way?" — trust this
+                                                              # over any prose claim about history
+git log -p -L '/def <function>/,/return/:<path>'           # same, scoped to one function's line range
+git diff <tag-or-commit> -- <paths>                         # diff against a checkpoint, not just working tree
+git blame <path>                                            # who/when introduced a specific line
+```
+
+**Diffing untracked files.** Plain `git diff` is silent on files git has never seen — no error, just
+nothing, which reads as "no changes" when it actually means "no baseline exists yet." This bit a
+review mid-session: an empty `git diff` was mistaken for "nothing changed" when the real state was
+"these files were never committed." Confirm which case you're in before trusting an empty diff:
+```bash
+git status                        # check for "Untracked files" first
+git add -N .                      # "intent to add," stages no content — makes git diff show new files as additions
+git diff                          # now renders untracked files in full instead of hiding them
+git reset                         # un-stage the intent-marks — nothing gets committed by this
+```
+

@@ -187,7 +187,7 @@ llm:
   roles:
     router:  { model: fast-low-latency, temperature: 0.0, max_tokens: 400  }
     grader:  { model: fast-low-latency, temperature: 0.0, max_tokens: 300  }
-    bulk:    { model: bulk-high-tpm,    temperature: 0.1, max_tokens: 2000 }
+    bulk:    { model: bulk-high-tpm,    temperature: 0.1, max_tokens: 32000 }
     synth:   { model: synth-quality,    temperature: 0.2, max_tokens: 1200 }
     judge:   { model: judge-alt-vendor, temperature: 0.0, max_tokens: 500  }
     # validated at startup: judge provider MUST differ from synth provider

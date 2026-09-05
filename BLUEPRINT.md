@@ -595,6 +595,16 @@ class Spend(BaseModel):
 
 class NodeFailure(BaseModel):
     node: str; code: str; message: str; attempt: int; at: datetime
+    # attempt = how many times THIS node has run, 1-based — i.e. the value of
+    # state["attempts"][node] for the run that produced the failure. Pinned at BO-10 audit;
+    # previously undeclared and hardcoded to the literal 1 at all five construction sites,
+    # which is what made stale failures indistinguishable from fresh ones.
+    #
+    # ⚠️ Routers MUST NOT branch on failures[-1]. `failures` is append-only (operator.add) and
+    # is never cleared, so the last entry may belong to a different node or to a superseded
+    # attempt. Select by node, THEN compare attempt against state["attempts"][node]. Branching
+    # on failures[-1].node discarded correct, grounded, repaired answers on every groundedness
+    # miss — and returned a well-formed HTTP 200 refusal, so nothing looked wrong.
 
 class RoutePlan(BaseModel):
     strategy: Literal["vector", "graph", "hybrid"]
@@ -1355,6 +1365,23 @@ class RedisCache:
 > directly and assert on LiteLLM's own `x-litellm-model-group` / `x-litellm-attempted-fallbacks`
 > response headers instead of going through `structured()`.
 
+> ⚠️ **On thinking-capable models, `max_tokens` covers thinking AND the response — an unset
+> `reasoning_effort` silently eats into the same budget you sized for output alone.** Confirmed on
+> Gemini 3+ Flash: omitting `reasoning_effort` doesn't disable thinking — GA Gemini 3.x defaults
+> to thinking level MEDIUM (`high` was the default only in the Gemini 3 Flash *preview*; corrected
+> at the BO-10 audit), invisible from app config. Note `minimal` is INVALID on `gemini-3.7-flash`
+> and returns an API validation error, though it is accepted on 3.5 Flash.
+> ⚠️ Separately: Gemini 3.x ignores `temperature`, `top_p` and `top_k` at the backend entirely, so
+> `llm.roles[*].temperature` is a no-op on every Gemini-backed role and live on the Groq and
+> OpenRouter ones. Determinism on Gemini comes from `reasoning_effort` and the response schema. Set per-deployment in `litellm/config.yaml`'s
+> `litellm_params` (e.g. `bulk-high-tpm`'s entry) — NOT in `base.yaml`'s `llm.roles[*]`, which is
+> schema-locked (`extra="forbid"`) and has no field for it. This is the same pattern as `model:`
+> itself: a property of the concrete provider deployment, not app business logic, so it belongs
+> where alias→model mapping already lives, keeping provider churn out of app config. Low/minimal
+> for structured, low-ambiguity work like `bulk` extraction, where the token budget belongs to the
+> output, not deliberation. Caveat: this is set per-ALIAS, not per-role — if an alias is ever
+> reused by a second role with different reasoning needs, they're stuck sharing one value.
+
 class LiteLLMClient:
     """Implements LLMClient. The ONLY component that talks to the gateway.
 
@@ -1671,6 +1698,13 @@ class QueryState(TypedDict):
           attempt, a node returns {"attempts": {"grade_context": 1}} — never the running total,
           which would be added to itself.
 
+    ⚠️ OPEN: `route_plan.j2` renders `{{ question }}`, which is immutable — so `plan_route`
+    re-planning on the `rewrite_query` loop-back feeds the router identical input and returns
+    an identical plan. The rewrite therefore cannot change strategy or seed entities; it only
+    affects whatever reads `active_query`. Either the router template should see `active_query`,
+    or the `rewrite_query -> plan_route` edge should skip straight to retrieval. Not yet decided
+    — do not "fix" this unilaterally.
+
     Why `question` and `active_query` are separate:
         `rewrite_query` loops back into `plan_route`, so a single mutable `question` would be
         overwritten by the rewrite. The user's original wording is then gone — and it is exactly
@@ -1682,6 +1716,10 @@ class QueryState(TypedDict):
     question: str                         # IMMUTABLE. The user's original words. Never rewritten.
     active_query: str                     # what retrieval actually uses; rewrite_query edits THIS
     plan: RoutePlan | None
+    top_k: int | None                     # from QueryRequest; None = use retrieval config default
+    strategy_override: Literal["vector", "graph", "hybrid"] | None
+                                          # POLICY ONLY, from QueryRequest.strategy. Never a
+                                          # pre-seeded RoutePlan — see plan_route in §6.4.
     vector_hits: list[ScoredChunk]        # one writer
     graph_hits: list[GraphPath]           # one writer
     fused: list[ScoredChunk]              # one writer
@@ -1800,18 +1838,39 @@ state update, and **mutates nothing**. Each is independently unit-testable with 
 | Node | File | Returns | Contract |
 |---|---|---|---|
 | `guard` | `guard.py` | `active_query` | Rejects empty / over `limits.max_query_chars` (`ValidationError`). Seeds `active_query = question`. |
-| `plan_route` | `plan_route.py` | `plan`, `spent`, `attempts` | LLM role `router` -> `RoutePlanOut`. On `LLMSchemaViolation` after repairs: return `plan=RoutePlan(strategy=orchestration.default_strategy)` plus a `NodeFailure`. **Fails open** — never propagates the error. |
+| `plan_route` | `plan_route.py` | `plan`, `spent`, `attempts` | LLM role `router` -> `RoutePlanOut`. On `LLMSchemaViolation` after repairs: return `plan=RoutePlan(strategy=orchestration.default_strategy)` plus a `NodeFailure`. **Fails open** — never propagates the error. ⚠️ **ALWAYS runs the router, including when `strategy_override` is set** — see the override contract below. Also re-runs on the `rewrite_query` loop-back; it has no short-circuit on an existing `plan`. |
 | `retrieve_vector` | `retrieve_vector.py` | `vector_hits`, maybe `degraded`, `failures` | On `RetrievalBackendUnavailable`: return `vector_hits=[]`, `degraded=["vector"]`, `failures=[...]`. Never raises. Runs in parallel with `retrieve_graph`. |
 | `retrieve_graph` | `retrieve_graph.py` | `graph_hits`, maybe `degraded`, `failures` | On `GraphBackendUnavailable`: `graph_hits=[]`, `degraded=["graph"]`. Zero linked entities is a normal empty result, not a failure. |
 | `fuse` | `fuse.py` | `fused` | Pure. Converts `GraphPath`s to `ScoredChunk`s (origin='graph', ranked by path score) then RRF. **No LLM call.** If both inputs are empty, returns `fused=[]`. |
 | `grade_context` | `grade_context.py` | `graded`, `spent`, `attempts` | LLM role `grader`, batched at `orchestration.grader.batch_size`. On failure with `fail_open=true`: treat all as relevant, emit `grader_degraded`. |
 | `rewrite_query` | `rewrite_query.py` | `active_query`, `attempts`, `spent` | LLM role `router`. Writes `active_query` ONLY — never `question`. Bounded by `orchestration.max_query_rewrites`. |
 | `generate` | `generate.py` | `answer`, `spent`, `attempts` | LLM role `synth` -> `AnswerOut`. Prompted with `question` (the user's actual ask), grounded on `graded`. |
-| `verify_citations` | `verify_citations.py` | `{}` or `failures` | **Deterministic, no LLM.** Every `answer.citations[].chunk_id` must be in `{c.chunk.chunk_id for c in graded}`. On violation: increment `citations_invalid`, append a `NodeFailure` with the offending IDs. |
-| `verify_grounded` | `verify_grounded.py` | `{}` or `failures`, `spent` | LLM role `judge` -> `Entailment`. Fails if `score < min_groundedness_score`. |
+| `verify_citations` | `verify_citations.py` | `{}` or `failures`, `attempts` | **Deterministic, no LLM.** Every `answer.citations[].chunk_id` must be in `{c.chunk.chunk_id for c in graded}`. On violation: increment `citations_invalid`, append a `NodeFailure` with the offending IDs. |
+| `verify_grounded` | `verify_grounded.py` | `{}` or `failures`, `attempts`, `spent` | LLM role `judge` -> `Entailment`. Fails if `score < min_groundedness_score`. |
 | `repair` | `repair.py` | `attempts`, maybe `failures` | Pure routing bookkeeping; contains no LLM call. |
 | `finalize` | `finalize.py` | `{}` | Terminal. |
 | `insufficient` | `insufficient.py` | `answer` | Builds a refusal citing what *was* retrieved. Increments `answer_refused{reason}`. **This is a success path, not an error path** — HTTP 200. |
+
+**The `strategy` override contract (pinned at the BO-10 audit).**
+
+`QueryRequest.strategy` overrides **policy only**. The router does two separable jobs: it picks a
+strategy, which a client can legitimately know, and it extracts `seed_entities` / `template` /
+`hops` / `relation_type` / `sub_queries` from the question, which a client cannot supply. A client
+override replaces the first and never the second.
+
+So: `plan_route` always calls the router, then overwrites `plan.strategy` with the override; the
+fail-open path uses the override in place of `default_strategy`. `strategy_override` lives on
+`QueryState` as a bare `Literal`, never as a pre-seeded `RoutePlan`.
+
+⚠️ **Never pre-seed `state["plan"]` to carry an override.** Doing so makes `plan_route`
+short-circuit, leaving `seed_entities` empty, which makes `GraphRetriever._params_for` return
+`None` and graph retrieval return `[]`. Net effect: `strategy="graph"` returns zero results always,
+and `strategy="hybrid"` silently degrades to vector-only with `degraded` empty. It also invalidates
+any A/B of routing policy, since the strategies no longer share seeds.
+
+`rationale` on the returned plan must be the router's real reasoning. It is never a synthetic string
+such as `"User override via API"` — the router genuinely ran, and a fabricated rationale makes a
+broken plan read as a deliberate one.
 
 ```python
 # graph.py
@@ -1842,8 +1901,11 @@ class NodeDeps(BaseModel):
 
 class OrchestrationService:
     """Contract:
-        - run(question, correlation_id) -> QueryResult
-        - stream(question, correlation_id) -> AsyncIterator[StreamEvent] emitting
+        - run(question, correlation_id, top_k=None, strategy=None) -> QueryResult
+          top_k and strategy come from QueryRequest (§7.1) and are seeded onto QueryState as
+          `top_k` and `strategy_override`. `strategy` is policy only — never a pre-seeded plan.
+        - stream(question, correlation_id, top_k=None, strategy=None)
+          -> AsyncIterator[StreamEvent] emitting
           node_start / node_end / token / done when orchestration.streaming.emit_node_events.
         - Translates terminal state into a QueryResult carrying answer, citations, route,
           degraded[], spent, and correlation_id.
@@ -1993,10 +2055,19 @@ class ProjectionWorkerSettings:
 > healthcheck:
 >   test: ["CMD", "arq", "--check", "graphrag.apps.worker.settings.WorkerSettings"]
 >   interval: 15s
->   timeout: 10s
+>   timeout: 20s
 >   retries: 5
 >   start_period: 30s
 > ```
+> ⚠️ `timeout` was originally specified as `10s` here and that value is wrong in practice: `arq
+> --check` spins up a fresh Python subprocess that re-imports `WorkerSettings`, and if that import
+> chain isn't kept lazy (`Container`, ML/DB-driver imports, task modules), the check itself
+> reliably takes over 10s cold — measured directly at 10.8s/11.7s/13.7s/13.5s across four
+> back-to-back runs, every one a legitimate pass (exit 0) that the old `10s` timeout would still
+> kill. Two independent things fix this: keep `WorkerSettings`'s import chain lazy (register tasks
+> as import-string paths, defer `Container` construction into `on_startup`), AND set `timeout`
+> with real margin above whatever that costs — `20s` held clean after the lazy-import fix dropped
+> cold-import time to under 1s, don't assume that's true before verifying it on your own build.
 > **`health_check_interval` must be shorter than the compose `interval`** (10s < 15s). Invert
 > them and the sentinel expires between probes, so the container flaps between healthy and
 > unhealthy for no reason.
