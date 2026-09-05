@@ -188,3 +188,80 @@ async def test_get_trail_auth_and_env_logic(container: Any, client: httpx.AsyncC
 
         res = await client.get(url, headers={"Admin-Key": admin_key})
         assert res.status_code == 404
+
+
+def _script_three_route_plans(container: Any) -> None:
+    """Router script for the refusal path: `rewrite_query` loops back to `plan_route`, which
+    re-plans (BLUEPRINT §6.4), so three `RoutePlanOut` and two `RewrittenQuery`."""
+    plan_out = RoutePlanOut(
+        strategy="vector",
+        template="neighbors",
+        seed_entities=[],
+        hops=1,
+        sub_queries=[],
+        rationale="",
+    )
+    container.llm_client.script_structured(
+        "router",
+        plan_out,
+        plan_out,
+        plan_out,
+        RewrittenQuery(query="r1", changed_because=""),
+        RewrittenQuery(query="r2", changed_because=""),
+    )
+
+
+def _spy_on_top_k(container: Any) -> list[int]:
+    """Record the `top_k` every `hybrid_search` is issued with.
+
+    This is the deepest point in the chain: `VectorRetriever.retrieve(query, top_k)` passes it
+    straight to the store, so observing it here proves the value travelled the whole
+    request -> QueryState -> retrieve_vector -> VectorRetriever path rather than being read
+    from config at the far end.
+    """
+    seen: list[int] = []
+    original = container.vector_store.hybrid_search
+
+    async def spy(**kwargs: Any):
+        seen.append(kwargs["top_k"])
+        return await original(**kwargs)
+
+    container.vector_store.hybrid_search = spy
+    return seen
+
+
+@pytest.mark.asyncio
+async def test_client_top_k_reaches_the_vector_retriever(
+    container: Any, client: httpx.AsyncClient
+) -> None:
+    """A client-supplied `top_k` overrides `retrieval.vector.top_k` all the way down.
+
+    BLUEPRINT §7.1 defines `QueryRequest{question, top_k?, strategy?}` and §6.4 seeds `top_k`
+    onto `QueryState`; `retrieve_vector` reads `state["top_k"] or retrieval.vector.top_k`. The
+    field was plumbed through without a test covering the path end to end.
+    """
+    configured_default = container.settings.retrieval.vector.top_k
+    assert configured_default != 3, "pick a top_k that differs from the config default"
+    seen = _spy_on_top_k(container)
+    _script_three_route_plans(container)
+
+    response = await client.post("/v1/query", json={"question": "test", "top_k": 3})
+
+    assert response.status_code == 200
+    assert seen, "retrieve_vector never reached the vector store"
+    assert set(seen) == {3}, f"expected every search at top_k=3, got {seen}"
+
+
+@pytest.mark.asyncio
+async def test_omitted_top_k_falls_back_to_the_config_default(
+    container: Any, client: httpx.AsyncClient
+) -> None:
+    """The companion: with no `top_k` on the request, the configured default is what is used —
+    so the test above is measuring an override, not just the only value in play."""
+    seen = _spy_on_top_k(container)
+    _script_three_route_plans(container)
+
+    response = await client.post("/v1/query", json={"question": "test"})
+
+    assert response.status_code == 200
+    assert set(seen) == {container.settings.retrieval.vector.top_k}

@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 import magic
-from fastapi import APIRouter, Depends, File, Header, UploadFile
+from fastapi import APIRouter, Depends, File, Header, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -20,7 +20,6 @@ from graphrag.apps.api.deps import get_container
 from graphrag.apps.api.main import Container
 from graphrag.core.errors import ValidationError
 from graphrag.core.events import DeleteDocumentPayload, IngestDocumentPayload, JobEnvelope
-from graphrag.core.ids import new_correlation_id
 from graphrag.services.ingestion.service import document_id, document_sha256
 
 router = APIRouter(prefix="/v1/documents", tags=["documents"])
@@ -44,6 +43,7 @@ class DocumentJobResponse(BaseModel):
     },
 )
 async def create_document(
+    request: Request,
     file: Annotated[UploadFile, File()],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     container: Container = Depends(get_container),
@@ -75,7 +75,11 @@ async def create_document(
 
     doc_id = document_id(raw)
     sha256 = document_sha256(raw)
-    correlation_id = new_correlation_id()
+    # Bound by CorrelationIdMiddleware and echoed on the response header — read it rather than
+    # minting a second one, or the id in this body correlates with nothing. Same read as
+    # `errors.py`, and the id travels onto the JobEnvelope so the worker's span is a child of
+    # this request's trace.
+    correlation_id = str(request.scope.get("correlation_id") or "unknown")
     uri = persist_upload(raw, doc_id)
 
     is_new = await container.ledger.register(doc_id, uri, sha256, sniffed_mime)
@@ -105,11 +109,11 @@ async def create_document(
 
 @router.delete("/{doc_id}", status_code=202, response_model=DocumentJobResponse)
 async def delete_document(
-    doc_id: str, container: Container = Depends(get_container)
+    doc_id: str, request: Request, container: Container = Depends(get_container)
 ) -> JSONResponse:
     """Enqueues `DeleteDocument`. Returns 202. Never deletes inline — see
     `services.ingestion.service.DeletionService`."""
-    correlation_id = new_correlation_id()
+    correlation_id = str(request.scope.get("correlation_id") or "unknown")
     job_id = await container.job_queue.enqueue(
         "delete_document",
         JobEnvelope(

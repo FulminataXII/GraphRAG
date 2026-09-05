@@ -12,13 +12,18 @@ from graphrag.services.orchestration.state import QueryState
 
 async def node(state: QueryState, deps: NodeDeps) -> dict[str, Any]:
     active_query = state.get("active_query", "")
-    top_k = deps.settings.retrieval.vector.top_k
+    top_k = state.get("top_k") or deps.settings.retrieval.vector.top_k
+    # `rewrite_query` loops back through retrieval, so this node runs more than once per query.
+    # See `verify_grounded.node` for why the count tracks executions rather than failures.
+    attempt = state.get("attempts", {}).get("retrieve_vector", 0) + 1
+    counted: dict[str, Any] = {"attempts": {"retrieve_vector": 1}}
 
     try:
         vector_hits = await deps.vector.retrieve(active_query, top_k)
-        return {"vector_hits": vector_hits}
+        return {**counted, "vector_hits": vector_hits}
     except RetrievalBackendUnavailable as e:
         return {
+            **counted,
             "vector_hits": [],
             "degraded": ["vector"],
             "failures": [
@@ -26,7 +31,7 @@ async def node(state: QueryState, deps: NodeDeps) -> dict[str, Any]:
                     node="retrieve_vector",
                     code=e.code,
                     message=str(e),
-                    attempt=1,
+                    attempt=attempt,
                     at=deps.clock.now(),
                 )
             ],

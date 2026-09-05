@@ -15,8 +15,14 @@ from graphrag.services.orchestration.state import QueryState
 async def node(state: QueryState, deps: NodeDeps) -> dict[str, Any]:
     answer = state.get("answer")
     graded = state.get("graded", [])
+    # 1-based index of THIS run of this node. `failures` is append-only (BLUEPRINT §6.4), so a
+    # NodeFailure is only distinguishable from an earlier run's by the attempt it was recorded
+    # on -- see `graph._failed_on_current_attempt`. Counted on every path, including the ones
+    # that do no work: the number must track node executions or it mislabels a later failure.
+    attempt = state.get("attempts", {}).get("verify_grounded", 0) + 1
+    counted = {"attempts": {"verify_grounded": 1}}
     if not answer:
-        return {}
+        return counted
 
     chunks = [c.chunk for c in graded]
 
@@ -38,28 +44,30 @@ async def node(state: QueryState, deps: NodeDeps) -> dict[str, Any]:
 
         if entailment.score < deps.settings.orchestration.verification.min_groundedness_score:
             return {
+                **counted,
                 "spent": spent,
                 "failures": [
                     NodeFailure(
                         node="verify_grounded",
                         code="UNGROUNDED_ANSWER",
                         message=f"Answer is not grounded (score {entailment.score})",
-                        attempt=1,
+                        attempt=attempt,
                         at=deps.clock.now(),
                     )
                 ],
             }
 
-        return {"spent": spent}
+        return {**counted, "spent": spent}
     except LLMSchemaViolation as e:
         return {
+            **counted,
             "failures": [
                 NodeFailure(
                     node="verify_grounded",
                     code=e.code,
                     message=str(e),
-                    attempt=1,
+                    attempt=attempt,
                     at=deps.clock.now(),
                 )
-            ]
+            ],
         }

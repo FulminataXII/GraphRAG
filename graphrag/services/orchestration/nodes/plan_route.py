@@ -13,7 +13,16 @@ from graphrag.services.orchestration.state import QueryState
 
 
 async def node(state: QueryState, deps: NodeDeps) -> dict[str, Any]:
+    # No "plan already set -> return {}" short-circuit. That branch existed only to let a
+    # client-supplied `strategy` bypass the router by pre-seeding a whole fabricated RoutePlan,
+    # and the plan it fabricated carried `seed_entities=[]`, which made every graph traversal
+    # return nothing. The client's choice now arrives as `strategy_override` and is applied
+    # below, so the router always runs and always supplies the semantics. BLUEPRINT §6.4's edge
+    # list routes `rewrite_query -> plan_route`, which re-plans, as it did before the override
+    # was bolted on.
     question = state["question"]
+    # Policy from the client when supplied, semantics from the router either way.
+    override = state.get("strategy_override")
     prompt = render("route_plan.j2", question=question)
 
     try:
@@ -25,7 +34,7 @@ async def node(state: QueryState, deps: NodeDeps) -> dict[str, Any]:
         )
         plan_out = result.value
         plan = RoutePlan(
-            strategy=plan_out.strategy,
+            strategy=override or plan_out.strategy,
             template=plan_out.template,
             seed_entities=plan_out.seed_entities,
             hops=plan_out.hops,
@@ -45,9 +54,11 @@ async def node(state: QueryState, deps: NodeDeps) -> dict[str, Any]:
             "attempts": {"plan_route": 1},
         }
     except LLMSchemaViolation as e:
-        default_strategy = deps.settings.orchestration.default_strategy
+        # Fail open (BLUEPRINT §6.4). An explicit client strategy still wins over the
+        # configured default — it is the one part of the plan that did not depend on the
+        # router succeeding.
         plan = RoutePlan(
-            strategy=default_strategy,
+            strategy=override or deps.settings.orchestration.default_strategy,
             template="neighbors",
             seed_entities=[],
             hops=1,
@@ -63,7 +74,7 @@ async def node(state: QueryState, deps: NodeDeps) -> dict[str, Any]:
                     node="plan_route",
                     code=e.code,
                     message=str(e),
-                    attempt=1,
+                    attempt=state.get("attempts", {}).get("plan_route", 0) + 1,
                     at=deps.clock.now(),
                 )
             ],

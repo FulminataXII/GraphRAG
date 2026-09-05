@@ -1,13 +1,12 @@
 from typing import Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from graphrag.apps.api.deps import get_container
 from graphrag.apps.api.errors import ErrorEnvelope
 from graphrag.apps.api.main import Container
-from graphrag.core.ids import new_correlation_id
 from graphrag.core.models import Answer, Citation, RoutePlan, Spend
 
 router = APIRouter(prefix="/v1/query", tags=["query"])
@@ -37,11 +36,17 @@ class QueryResponse(BaseModel):
 @router.post("", responses=ERROR_RESPONSES)
 async def query_sync(
     request: QueryRequest,
+    http_request: Request,
     container: Container = Depends(get_container),
 ) -> QueryResponse:
-    # Normally we'd get correlation_id from middleware, for now generate one
-    cid = new_correlation_id()
-    result = await container.orchestrator.run(request.question, cid)
+    # The correlation id is bound ONCE per request, by CorrelationIdMiddleware, which also
+    # echoes it on the response header and sets it as the `app.correlation_id` span attribute
+    # the trail query keys on. Minting a second one here would hand the client an id that
+    # matches neither the header, the logs, nor the trace. Same read as `errors.py`.
+    cid = str(http_request.scope.get("correlation_id") or "unknown")
+    result = await container.orchestrator.run(
+        request.question, cid, strategy=request.strategy, top_k=request.top_k
+    )
 
     # Extract citations from answer if present
     citations = result.answer.citations if result.answer else []
@@ -59,12 +64,15 @@ async def query_sync(
 @router.post("/stream")
 async def query_stream(
     request: QueryRequest,
+    http_request: Request,
     container: Container = Depends(get_container),
 ) -> StreamingResponse:
-    cid = new_correlation_id()
+    cid = str(http_request.scope.get("correlation_id") or "unknown")
 
     async def sse_generator():
-        async for event in container.orchestrator.stream(request.question, cid):
+        async for event in container.orchestrator.stream(
+            request.question, cid, strategy=request.strategy, top_k=request.top_k
+        ):
             yield f"data: {event.model_dump_json()}\n\n"
 
     return StreamingResponse(sse_generator(), media_type="text/event-stream")

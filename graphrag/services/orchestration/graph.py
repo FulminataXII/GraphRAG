@@ -96,9 +96,33 @@ def route_after_grade(state: QueryState, deps: NodeDeps) -> str:
     return "rewrite_query"
 
 
+def _failed_on_current_attempt(state: QueryState, node: str) -> bool:
+    """Did `node` record a failure on the attempt it has just completed?
+
+    `failures` is append-only (BLUEPRINT §6.4's `Annotated[list[NodeFailure], operator.add]`),
+    so it accumulates every failure from every node for the whole query and nothing ever
+    removes or supersedes an entry. Two things follow, and a router must handle both:
+
+      - A failure from an EARLIER attempt of this node is still present after a repair that
+        succeeded. Branching on its presence alone latches the loop on: the repaired answer is
+        re-verified, passes, appends nothing, and the router still sees the old failure.
+      - `failures[-1]` does not necessarily belong to the node the router is deciding about. A
+        `retrieve_vector` degradation on a later rewrite pass leaves a `retrieve_vector` failure
+        last, which a `failures[-1].node == ...` test then reads as "not my failure" only by
+        luck of ordering.
+
+    So: select by node, then match `NodeFailure.attempt` against that node's own current
+    `attempts` count. Attempts are 1-based, so a node that has never run (count 0) can have no
+    matching failure.
+    """
+    current = state.get("attempts", {}).get(node, 0)
+    if current == 0:
+        return False
+    return any(f.node == node and f.attempt == current for f in state.get("failures", []))
+
+
 def route_after_citations(state: QueryState, deps: NodeDeps) -> str:
-    failures = state.get("failures", [])
-    if failures and failures[-1].node == "verify_citations":
+    if _failed_on_current_attempt(state, "verify_citations"):
         return "repair"
 
     if not deps.settings.orchestration.verification.check_groundedness:
@@ -113,8 +137,7 @@ def route_after_citations(state: QueryState, deps: NodeDeps) -> str:
 
 
 def route_after_grounded(state: QueryState, deps: NodeDeps) -> str:
-    failures = state.get("failures", [])
-    if failures and failures[-1].node == "verify_grounded":
+    if _failed_on_current_attempt(state, "verify_grounded"):
         return "repair"
     return "finalize"
 
@@ -188,12 +211,20 @@ class OrchestrationService:
         self.deps = deps
         self.graph = build_query_graph(deps, deps.settings)
 
-    async def run(self, question: str, correlation_id: str) -> QueryResult:
+    async def run(
+        self,
+        question: str,
+        correlation_id: str,
+        top_k: int | None = None,
+        strategy: Literal["vector", "graph", "hybrid"] | None = None,
+    ) -> QueryResult:
         state: dict[str, Any] = {
             "correlation_id": correlation_id,
             "question": question,
             "active_query": question,
             "plan": None,
+            "top_k": top_k,
+            "strategy_override": strategy,
             "vector_hits": [],
             "graph_hits": [],
             "fused": [],
@@ -213,7 +244,13 @@ class OrchestrationService:
             correlation_id=final_state["correlation_id"],
         )
 
-    async def stream(self, question: str, correlation_id: str) -> AsyncIterator[StreamEvent]:
+    async def stream(
+        self,
+        question: str,
+        correlation_id: str,
+        top_k: int | None = None,
+        strategy: Literal["vector", "graph", "hybrid"] | None = None,
+    ) -> AsyncIterator[StreamEvent]:
         # Trivial stream implementation since real SSE involves LangGraph ASTREAM which might be complex
         # For BO-10 we just need basic node events emitted in order.
         state: dict[str, Any] = {
@@ -221,6 +258,8 @@ class OrchestrationService:
             "question": question,
             "active_query": question,
             "plan": None,
+            "top_k": top_k,
+            "strategy_override": strategy,
             "vector_hits": [],
             "graph_hits": [],
             "fused": [],
