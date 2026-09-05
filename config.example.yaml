@@ -171,7 +171,9 @@ orchestration:
 # -----------------------------------------------------------------------------
 llm:
   gateway_base_url: http://litellm:4000/v1
-  request_timeout_s: 45
+  # Fallback ceiling for any role below that names no `timeout_s` of its own. Sized for
+  # `bulk`, the slowest legitimate call.
+  request_timeout_s: 300
   # litellm router_settings (set in litellm/config.yaml, mirrored here for review):
   #   routing_strategy: simple-shuffle   <- LiteLLM's default AND documented prod recommendation.
   #                                         Weighted pick honouring per-deployment rpm/tpm/weight.
@@ -184,12 +186,18 @@ llm:
   # otherwise the router budgets 16000, forwards, and Groq 429s.
   # These are LiteLLM model *aliases*, not provider model names. The alias -> concrete model
   # mapping lives only in litellm/config.yaml, so provider churn never touches app config.
+  # `timeout_s` is optional and bounds ONE upstream request for that role; unset falls back to
+  # request_timeout_s above. It is a ceiling over LiteLLM's whole sequence for the request —
+  # first attempt + litellm_settings.num_retries + the cross-provider fallback — not over a
+  # single provider call, so it must stay above the per-deployment `timeout` in
+  # litellm/config.yaml times the attempts LiteLLM makes, or the app aborts the request before
+  # the fallback it depends on is ever tried.
   roles:
-    router:  { model: fast-low-latency, temperature: 0.0, max_tokens: 400  }
-    grader:  { model: fast-low-latency, temperature: 0.0, max_tokens: 300  }
-    bulk:    { model: bulk-high-tpm,    temperature: 0.1, max_tokens: 32000 }
-    synth:   { model: synth-quality,    temperature: 0.2, max_tokens: 1200 }
-    judge:   { model: judge-alt-vendor, temperature: 0.0, max_tokens: 500  }
+    router:  { model: fast-low-latency, temperature: 0.0, max_tokens: 400,  timeout_s: 60  }
+    grader:  { model: fast-low-latency, temperature: 0.0, max_tokens: 300,  timeout_s: 60  }
+    bulk:    { model: bulk-high-tpm,    temperature: 0.1, max_tokens: 32000, timeout_s: 300 }
+    synth:   { model: synth-quality,    temperature: 0.2, max_tokens: 1200, timeout_s: 120 }
+    judge:   { model: judge-alt-vendor, temperature: 0.0, max_tokens: 500,  timeout_s: 60  }
     # validated at startup: judge provider MUST differ from synth provider
     # (LLM-as-judge self-preference bias)
   batching:

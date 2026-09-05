@@ -37,6 +37,14 @@ model_list:
     litellm_params:
       model: gemini/gemini-3.1-pro-preview
       api_key: os.environ/GEMINI_API_KEY_2
+      # Per-DEPLOYMENT ceiling on one upstream attempt. Without it the per-attempt timeout is
+      # effectively unbounded, so the app-side ceiling (base.yaml llm.roles.synth.timeout_s: 120)
+      # becomes the only thing that fires -- and because that ceiling covers the whole sequence
+      # (attempt + num_retries: 2 + the fallback to judge-alt-vendor), a provider that hangs
+      # rather than erroring fast burns the entire budget on Google and the fallback we depend on
+      # never runs. 3 attempts x 30s = 90s upstream, leaving 30s inside the 120s for the fallback
+      # to be attempted.
+      timeout: 30
       rpm: 5
       tpm: 250000
 

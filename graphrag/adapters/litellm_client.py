@@ -67,6 +67,13 @@ class LiteLLMClient:
           fallbacks in litellm/config.yaml). The wrapped AsyncOpenAI client is constructed with
           max_retries=0 for the same reason: the SDK's own retry layer would otherwise retry
           transparently underneath us.
+        - Every upstream call passes a per-request timeout of llm.timeout_for(role) —
+          llm.roles[role].timeout_s when set, else llm.request_timeout_s. This overrides the
+          timeout the shared AsyncOpenAI was constructed with, which is what makes one client
+          serviceable for five roles whose legitimate durations differ by an order of magnitude.
+          It bounds LiteLLM's WHOLE sequence for the request (attempt + num_retries + fallback),
+          not one upstream call, so it must stay above the gateway-side per-deployment timeout
+          multiplied by the attempts LiteLLM will make, or the fallback never gets to run.
         - On 429: reads Retry-After and the x-ratelimit-* headers named in
           llm.adaptive_rate_limit.read_headers, records llm_rate_limited, and raises
           RateLimited with retry_after in details. Static RPM values are never trusted.
@@ -103,6 +110,7 @@ class LiteLLMClient:
     ) -> StructuredResult[T]:
         role_spec = self._llm.roles[role]
         alias = role_spec.model
+        timeout_s = self._llm.timeout_for(role)
         response_format = (
             _json_schema_response_format(schema)
             if self._llm.structured_output.mode == "json_schema"
@@ -118,6 +126,7 @@ class LiteLLMClient:
         with tracer().start_as_current_span("LiteLLMClient.structured") as span:
             span.set_attribute("llm.role", role)
             span.set_attribute("llm.alias", alias)
+            span.set_attribute("llm.timeout_s", timeout_s)
             if self._record_prompts:
                 span.set_attribute(
                     "llm.prompt",
@@ -132,6 +141,7 @@ class LiteLLMClient:
                             temperature=role_spec.temperature,
                             max_tokens=role_spec.max_tokens,
                             response_format=response_format,  # type: ignore[arg-type]
+                            timeout=timeout_s,
                         )
                     except RateLimitError as exc:
                         headers = exc.response.headers
@@ -223,6 +233,7 @@ class LiteLLMClient:
                 temperature=role_spec.temperature,
                 max_tokens=role_spec.max_tokens,
                 stream=True,
+                timeout=self._llm.timeout_for(role),
             )
         except APIError as exc:
             raise LLMProviderExhausted(

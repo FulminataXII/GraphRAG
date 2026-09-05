@@ -259,3 +259,47 @@ async def test_client_does_not_retry_provider_errors(settings: Settings) -> None
         )
 
     assert len(fake.completions.calls) == 1
+
+
+async def test_per_role_timeout_is_sent_on_every_upstream_call(settings: Settings) -> None:
+    """`router` carries its own `timeout_s`, so every call it makes -- the repair attempts
+    included -- must be bounded by that, not by the global `request_timeout_s` the shared
+    AsyncOpenAI client was constructed with."""
+    role_timeout = settings.llm.roles["router"].timeout_s
+    assert role_timeout is not None and role_timeout != settings.llm.request_timeout_s
+    fake = _FakeAsyncOpenAI(_completion("not json"), _completion(_VALID_ROUTE_PLAN_JSON))
+    client = _client(fake, settings.llm)
+
+    await client.structured(
+        role="router",
+        messages=[{"role": "user", "content": "hi"}],
+        schema=RoutePlanOut,
+        max_repairs=2,
+    )
+
+    assert len(fake.completions.calls) == 2
+    assert [call["timeout"] for call in fake.completions.calls] == [role_timeout, role_timeout]
+
+
+async def test_role_without_timeout_falls_back_to_request_timeout(settings: Settings) -> None:
+    """The field is optional so existing behaviour is preserved: a role that names no
+    `timeout_s` is still bounded by `llm.request_timeout_s`."""
+    llm = settings.llm.model_copy(
+        update={
+            "roles": {
+                **settings.llm.roles,
+                "router": settings.llm.roles["router"].model_copy(update={"timeout_s": None}),
+            }
+        }
+    )
+    fake = _FakeAsyncOpenAI(_completion(_VALID_ROUTE_PLAN_JSON))
+    client = _client(fake, llm)
+
+    await client.structured(
+        role="router",
+        messages=[{"role": "user", "content": "hi"}],
+        schema=RoutePlanOut,
+        max_repairs=2,
+    )
+
+    assert fake.completions.calls[0]["timeout"] == settings.llm.request_timeout_s

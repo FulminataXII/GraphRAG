@@ -257,6 +257,13 @@ class RoleSpec(_Section):
     model: str
     temperature: float
     max_tokens: int
+    # Ceiling on ONE upstream request for this role, in seconds. Optional: unset falls back to
+    # llm.request_timeout_s, so a role that names no value behaves exactly as it did before this
+    # field existed. Roles differ by an order of magnitude in how long a legitimate call takes --
+    # `bulk` emits up to 32k tokens per batched extraction, `router`/`grader`/`judge` return a
+    # few hundred -- and one global ceiling has to be sized for the slowest of them, which leaves
+    # a hung small-role call indistinguishable from a slow one for minutes.
+    timeout_s: int | None = None
 
 
 class BatchingSpec(_Section):
@@ -284,6 +291,14 @@ class LLMSection(_Section):
     batching: BatchingSpec
     adaptive_rate_limit: AdaptiveRateLimitSpec
     structured_output: StructuredOutputSpec
+
+    def timeout_for(self, role: str) -> int:
+        """Seconds one upstream request for `role` may take -- its own `timeout_s` when set,
+        otherwise the global `request_timeout_s`."""
+        spec = self.roles.get(role)
+        if spec is None or spec.timeout_s is None:
+            return self.request_timeout_s
+        return spec.timeout_s
 
     @model_validator(mode="after")
     def _validate(self) -> LLMSection:
