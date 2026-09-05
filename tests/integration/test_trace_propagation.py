@@ -24,10 +24,14 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from graphrag.adapters.arq_queue import ArqJobQueue
 from graphrag.apps.worker.tasks._common import run_task
 from graphrag.core.events import IngestDocumentPayload, JobEnvelope
+from tests.integration import namespaces as ns
 
 pytestmark = pytest.mark.integration
 
-_REDIS_URL = "redis://localhost:6379/0"
+# NOT db 0. This module runs a real `arq.Worker` in burst mode: pointed at the production queue
+# it would pull and execute whatever ingest/projection jobs `graphrag-worker-1` had not yet
+# claimed. See tests/integration/namespaces.py.
+_REDIS_URL = ns.REDIS_URL
 _CAPTURED_TRACE_IDS: list[int] = []
 
 

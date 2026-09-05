@@ -23,11 +23,14 @@ from graphrag.apps.api.routers import documents
 from graphrag.config.settings import Settings
 from tests.factories import make_metrics
 from tests.fakes import FakeCache, FakeDocumentLedger, FakeSourceRegistry
+from tests.integration import namespaces as ns
 from tests.unit._settings_helpers import set_required_secrets
 
 pytestmark = pytest.mark.integration
 
-_REDIS_URL = "redis://localhost:6379/0"
+# NOT db 0: these tests enqueue real jobs, and on the production queue the running
+# `graphrag-worker-1` would pick them up. See tests/integration/namespaces.py.
+_REDIS_URL = ns.REDIS_URL
 
 
 @pytest.fixture
@@ -40,7 +43,7 @@ async def arq_pool() -> AsyncIterator[ArqRedis]:
 @pytest.fixture
 def settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
     set_required_secrets(monkeypatch)
-    return Settings()
+    return ns.namespaced(Settings())
 
 
 @pytest.fixture

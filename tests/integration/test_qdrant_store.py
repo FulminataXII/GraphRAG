@@ -1,14 +1,14 @@
 """`QdrantVectorStore` against a real Qdrant. See BLUEPRINT §5.2 / BUILD_ORDER BO-04.
 
-Every test gets its own uniquely-named chunks/entities collection pair (see `qdrant_settings`),
-so tests never collide with each other, with a real corpus, or depend on run order — despite
+Every test gets its own chunks/entities collection pair under this run's namespace (see
+`qdrant_settings` / tests/integration/namespaces.py), so tests never collide with each other,
+with a real corpus, or depend on run order — despite
 BUILD_ORDER's note that `test_collection_created_with_idf_modifier` should "run first", that's
 about a human's manual debugging order, not a pytest ordering requirement this suite relies on.
 """
 
 from __future__ import annotations
 
-import contextlib
 import uuid
 from collections.abc import AsyncIterator
 
@@ -19,6 +19,8 @@ from graphrag.adapters.qdrant_store import QdrantVectorStore
 from graphrag.config.settings import Settings
 from graphrag.core.errors import ConflictError
 from tests.factories import make_chunk, make_source_ref
+from tests.integration import namespaces as ns
+from tests.integration.conftest import drop_collections
 from tests.unit._settings_helpers import set_required_secrets
 
 pytestmark = pytest.mark.integration
@@ -30,19 +32,13 @@ _DIM = 4  # override embedding.dense.dimensions to keep hand-crafted vectors sma
 @pytest.fixture
 def qdrant_settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
     """Real `Settings()` (APP_ENV defaults to "local", so `stores.qdrant.url` resolves to
-    localhost — see tests/integration/conftest.py's docstring), with the chunks/entities
-    collection names and dense dimension swapped for unique, small, test-local values."""
+    localhost — see tests/integration/conftest.py's docstring), namespaced to this run and this
+    test, with the dense dimension shrunk to keep hand-crafted vectors legible."""
     set_required_secrets(monkeypatch)
-    suffix = uuid.uuid4().hex[:8]
-    base = Settings()
-    vector = base.retrieval.vector.model_copy(update={"collection": f"test_chunks_{suffix}"})
-    retrieval = base.retrieval.model_copy(update={"vector": vector})
-    resolution = base.resolution.model_copy(update={"collection": f"test_entities_{suffix}"})
+    base = ns.namespaced(Settings(), local=uuid.uuid4().hex[:8])
     dense = base.embedding.dense.model_copy(update={"dimensions": _DIM})
     embedding = base.embedding.model_copy(update={"dense": dense})
-    return base.model_copy(
-        update={"retrieval": retrieval, "resolution": resolution, "embedding": embedding}
-    )
+    return base.model_copy(update={"embedding": embedding})
 
 
 @pytest.fixture
@@ -57,12 +53,11 @@ async def store(
     qdrant_client: AsyncQdrantClient, qdrant_settings: Settings
 ) -> AsyncIterator[QdrantVectorStore]:
     yield QdrantVectorStore(qdrant_client, qdrant_settings)
-    for name in (
+    await drop_collections(
+        qdrant_client,
         qdrant_settings.retrieval.vector.collection,
         qdrant_settings.resolution.collection,
-    ):
-        with contextlib.suppress(Exception):
-            await qdrant_client.delete_collection(name)
+    )
 
 
 def _sparse(indices: list[int], values: list[float]) -> models.SparseVector:

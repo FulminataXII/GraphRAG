@@ -39,6 +39,7 @@ from tests.fakes import (
     FakeSourceRegistry,
     FakeVectorStore,
 )
+from tests.integration import namespaces as ns
 from tests.unit._settings_helpers import set_required_secrets
 
 pytestmark = pytest.mark.integration
@@ -53,7 +54,7 @@ _CORPUS_DOC = (
 @pytest.fixture
 def graph_settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
     set_required_secrets(monkeypatch)
-    return Settings()
+    return ns.namespaced(Settings())
 
 
 @pytest.fixture

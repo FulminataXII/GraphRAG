@@ -10,7 +10,6 @@ correctness isn't under test here; BO-04 covers embeddings, `test_trace_propagat
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import hashlib
 import uuid
 from collections.abc import AsyncIterator
@@ -35,6 +34,8 @@ from graphrag.services.ingestion.service import (
     ProjectionService,
 )
 from tests.fakes import FakeClock, FakeEmbedder, FakeGraphStore, FakeJobQueue
+from tests.integration import namespaces as ns
+from tests.integration.conftest import drop_collections
 from tests.unit._settings_helpers import set_required_secrets
 
 pytestmark = pytest.mark.integration
@@ -53,16 +54,10 @@ _SHARED_PARAGRAPH = (
 @pytest.fixture
 def ingestion_settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
     set_required_secrets(monkeypatch)
-    suffix = uuid.uuid4().hex[:8]
-    base = Settings()
-    vector = base.retrieval.vector.model_copy(update={"collection": f"test_ing_chunks_{suffix}"})
-    retrieval = base.retrieval.model_copy(update={"vector": vector})
-    resolution = base.resolution.model_copy(update={"collection": f"test_ing_entities_{suffix}"})
+    base = ns.namespaced(Settings(), local=uuid.uuid4().hex[:8])
     dense = base.embedding.dense.model_copy(update={"dimensions": _DIM})
     embedding = base.embedding.model_copy(update={"dense": dense})
-    return base.model_copy(
-        update={"retrieval": retrieval, "resolution": resolution, "embedding": embedding}
-    )
+    return base.model_copy(update={"embedding": embedding})
 
 
 @pytest.fixture
@@ -79,12 +74,11 @@ async def vector_store(
     store = QdrantVectorStore(qdrant_client, ingestion_settings)
     await store.ensure_collections()
     yield store
-    for name in (
+    await drop_collections(
+        qdrant_client,
         ingestion_settings.retrieval.vector.collection,
         ingestion_settings.resolution.collection,
-    ):
-        with contextlib.suppress(Exception):
-            await qdrant_client.delete_collection(name)
+    )
 
 
 @pytest.fixture

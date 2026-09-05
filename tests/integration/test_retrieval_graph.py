@@ -20,6 +20,7 @@ from graphrag.core.models import Chunk, RoutePlan, SourceRef
 from graphrag.services.retrieval.graph import GraphRetriever
 from tests.factories import make_entity, make_relation
 from tests.fakes import FakeVectorStore
+from tests.integration import namespaces as ns
 from tests.unit._settings_helpers import set_required_secrets
 
 pytestmark = pytest.mark.integration
@@ -28,7 +29,7 @@ pytestmark = pytest.mark.integration
 @pytest.fixture
 def graph_settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
     set_required_secrets(monkeypatch)
-    return Settings()
+    return ns.namespaced(Settings())
 
 
 @pytest.fixture

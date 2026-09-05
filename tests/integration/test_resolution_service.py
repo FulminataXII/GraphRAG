@@ -8,7 +8,6 @@ runs), so the embedding values themselves are never load-bearing for the asserti
 
 from __future__ import annotations
 
-import contextlib
 import uuid
 from collections.abc import AsyncIterator
 from uuid import uuid4
@@ -24,6 +23,8 @@ from graphrag.services.resolution.blocking import Blocker
 from graphrag.services.resolution.service import ResolutionService
 from tests.factories import make_metrics
 from tests.fakes import FakeEmbedder
+from tests.integration import namespaces as ns
+from tests.integration.conftest import drop_collections
 from tests.unit._settings_helpers import set_required_secrets
 
 pytestmark = pytest.mark.integration
@@ -35,12 +36,10 @@ _DIM = 4
 @pytest.fixture
 def resolution_settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
     set_required_secrets(monkeypatch)
-    suffix = uuid.uuid4().hex[:8]
-    base = Settings()
-    resolution = base.resolution.model_copy(update={"collection": f"test_res_entities_{suffix}"})
+    base = ns.namespaced(Settings(), local=uuid.uuid4().hex[:8])
     dense = base.embedding.dense.model_copy(update={"dimensions": _DIM})
     embedding = base.embedding.model_copy(update={"dense": dense})
-    return base.model_copy(update={"resolution": resolution, "embedding": embedding})
+    return base.model_copy(update={"embedding": embedding})
 
 
 @pytest.fixture
@@ -57,8 +56,7 @@ async def vector_store(
     store = QdrantVectorStore(qdrant_client, resolution_settings)
     await store.ensure_collections()
     yield store
-    with contextlib.suppress(Exception):
-        await qdrant_client.delete_collection(resolution_settings.resolution.collection)
+    await drop_collections(qdrant_client, resolution_settings.resolution.collection)
 
 
 @pytest.fixture

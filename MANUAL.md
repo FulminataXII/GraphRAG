@@ -73,7 +73,7 @@ Some terms used throughout, so nothing is implied:
 | `make` | GNU Make, the task runner. **Ubuntu-only** — it does not exist in PowerShell, which is one reason M-0 has you work inside WSL2. Installed via `apt install make`. |
 | `make up` / `make down` | Wrappers for `docker compose up -d` / `down`. You'll write them in BO-00; they exist so you never mistype a profile flag. |
 | **profile** | A Docker Compose label that groups services. `--profile core` starts the databases and app; `--profile obs` adds Grafana and Phoenix. Services without a matching profile stay stopped. Lets you run a lean loop and a full demo from one file. |
-| `make test` | `pytest -m "not integration and not eval"` — fast, no containers. `make test-int` adds integration tests, which need `make up` first. |
+| `make test` | `pytest -m "not integration and not eval"` — fast, no containers. `make test-int` adds integration tests, which need `make up` first; it also starts the isolated `neo4j-test` container they run against. |
 | `[G]` in the build order | A **gate** test. It guards a failure that produces no error message. If a `[G]` test is red, stop; do not proceed to the next BO. |
 | `[T]` / `[C]` | A test / a component to implement. |
 | `X` next to a BO | Blocked on a task of yours (M-2, M-3, or M-5). Do it *before* starting that BO. |
@@ -823,7 +823,19 @@ than any feature in the repo.
 - **DON'T let the agent implement across build orders.** "While I'm here I'll also add the retriever" is how you get an untested tangle. Stop it and re-scope.
 - **DON'T change a threshold to make a test pass.** Thresholds encode intent. If `routing_accuracy` is 0.68 against a 0.75 gate, fix the prompt or record 0.68 honestly.
 - **DON'T skip the IDF modifier check in BO-04.** It cannot be added later without recreating the collection and re-indexing everything.
-- **DON'T run integration tests against your demo data** without a reset — several tests delete documents.
+- **DON'T reset your demo data before `make test-int`.** You no longer need to, and the reset is
+  now the only real risk in the sequence. Integration tests cannot reach a real store: every
+  backend they touch is namespaced per run by `tests/integration/namespaces.py` —
+  Qdrant collections prefixed `test_<run>_`, a `graphrag_test_<run>` Postgres database the
+  session creates and drops, a Redis db index in 1–15 (never 0, where the arq queue the worker
+  consumes lives), and a **separate** `neo4j-test` container on port 7688 that `make test-int`
+  starts and `make up` does not. Neo4j needs its own instance rather than its own database
+  because Community Edition supports exactly one. `tests/integration/test_isolation_guard.py`
+  asserts all four differ from what `config/base.yaml` and `.env` resolve to, so the day someone
+  points a fixture back at production, a test says so instead of a corpus quietly emptying.
+  Run the suite through `make test-int`, not a bare `pytest -m integration`: the make target is
+  what starts `neo4j-test`. (A bare run fails with a message telling you this, rather than
+  falling back to 7687.)
 - **DON'T commit `.env`.** Check `gitleaks` before every push. One leaked key in a public CV repo undoes the whole project.
 - **DON'T put confidential or personal documents in `corpus/`.** Free tiers may train on prompts.
 - **DON'T let enforcement infrastructure be edited to make a build order pass.** `tests/` is only

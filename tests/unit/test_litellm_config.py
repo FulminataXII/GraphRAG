@@ -84,10 +84,16 @@ def test_litellm_config_has_fallbacks_and_otel() -> None:
 
 
 def _makefile_recipe(target: str) -> str:
-    """The (single-line) shell command under `<target>:` in the repo's Makefile."""
+    """The (single-line) shell command under `<target>:` in the repo's Makefile.
+
+    Matches the target name and tolerates prerequisites after the colon (`test-int: neo4j-test`
+    brings up the isolated Neo4j the integration suite talks to). The recipe line itself is
+    still read verbatim — what this test asserts about is unchanged.
+    """
     lines = (REPO_ROOT / "Makefile").read_text(encoding="utf-8").splitlines()
     for i, line in enumerate(lines):
-        if line.rstrip() == f"{target}:":
+        name, separator, _prerequisites = line.rstrip().partition(":")
+        if separator and name == target:
             return lines[i + 1].strip()
     raise AssertionError(f"no {target!r} target found in Makefile")
 

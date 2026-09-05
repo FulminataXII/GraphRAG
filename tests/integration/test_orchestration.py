@@ -1,17 +1,35 @@
 import pytest
 
 from graphrag.apps.api.main import Container
-from graphrag.config.settings import get_settings
+from graphrag.config.settings import Settings
+from tests.integration import namespaces as ns
 
 pytestmark = pytest.mark.integration
 
 
+async def _drop_qdrant(settings: Settings) -> None:
+    """Drop the collections `Container.create` made. Goes through `drop_collections`, which
+    refuses any name this run did not mint."""
+    from qdrant_client import AsyncQdrantClient
+
+    from tests.integration.conftest import drop_collections
+
+    admin = AsyncQdrantClient(url=settings.stores.qdrant.url, prefer_grpc=False, timeout=10)
+    try:
+        await drop_collections(
+            admin, settings.retrieval.vector.collection, settings.resolution.collection
+        )
+    finally:
+        await admin.close()
+
+
 @pytest.fixture
-async def container(monkeypatch) -> Container:
-    from tests.integration.conftest import POSTGRES_DSN_LOCAL
-
-    monkeypatch.setenv("GRAPHRAG_SECRETS__POSTGRES_DSN", POSTGRES_DSN_LOCAL)
-
+async def container(_pg_database: str) -> Container:
+    # `ns.namespaced`, not `get_settings()`. `Container.create` calls `ensure_collections()` and
+    # `ensure_schema()` on whatever it is handed, so a production `Settings` here pointed the
+    # whole orchestration suite at the real `chunks`/`entities` collections and the real graph.
+    # These tests assert on degradation and correlation-id handling, not on corpus content, so
+    # they are unaffected by moving to empty per-run namespaces.
     from unittest.mock import patch
 
     from graphrag.services.orchestration.schemas import (
@@ -49,11 +67,14 @@ async def container(monkeypatch) -> Container:
         *(Entailment(supported=True, score=1.0) for _ in range(50)),
     )
 
+    settings = ns.namespaced(Settings(), local="orch")
     with patch("graphrag.apps.api.main.LiteLLMClient", return_value=fake_llm):
-        settings = get_settings()
         c = await Container.create(settings)
+    try:
         yield c
+    finally:
         await c.aclose()
+        await _drop_qdrant(settings)
 
 
 @pytest.mark.asyncio
@@ -141,20 +162,16 @@ _VECTOR_ONLY_TEXT = "The Acme Robotics staff cafeteria on the third floor reopen
 
 
 @pytest.fixture
-async def hybrid_container(monkeypatch: pytest.MonkeyPatch, clean_neo4j):
-    """A real `Container` on test-local Qdrant collections, with a scripted LLM.
+async def hybrid_container(clean_neo4j, _pg_database: str):
+    """A real `Container` on this run's own Qdrant collections, with a scripted LLM.
 
-    The collections are uniquely named (the `tests/integration/test_qdrant_store.py`
-    convention) so this test neither reads nor damages an ingested corpus, and every chunk the
-    query can possibly see is one this fixture put there.
+    Every store it touches is namespaced by `tests/integration/namespaces.py`, so this test
+    neither reads nor damages an ingested corpus, and every chunk the query can possibly see is
+    one this fixture put there.
     """
-    import contextlib
     import uuid
     from unittest.mock import patch
 
-    from qdrant_client import AsyncQdrantClient
-
-    from graphrag.config.settings import Settings
     from graphrag.core.ids import chunk_id as compute_chunk_id
     from graphrag.services.orchestration.schemas import (
         AnswerOut,
@@ -166,21 +183,8 @@ async def hybrid_container(monkeypatch: pytest.MonkeyPatch, clean_neo4j):
         RoutePlanOut,
     )
     from tests.fakes import FakeLLMClient
-    from tests.integration.conftest import POSTGRES_DSN_LOCAL
 
-    monkeypatch.setenv("GRAPHRAG_SECRETS__POSTGRES_DSN", POSTGRES_DSN_LOCAL)
-
-    suffix = uuid.uuid4().hex[:8]
-    base = Settings()
-    vector_cfg = base.retrieval.vector.model_copy(update={"collection": f"test_chunks_{suffix}"})
-    settings = base.model_copy(
-        update={
-            "retrieval": base.retrieval.model_copy(update={"vector": vector_cfg}),
-            "resolution": base.resolution.model_copy(
-                update={"collection": f"test_entities_{suffix}"}
-            ),
-        }
-    )
+    settings = ns.namespaced(Settings(), local=uuid.uuid4().hex[:8])
 
     # Chunk ids are content-addressed, so the grader's and synth's scripted responses can name
     # the exact chunks this test is about before anything is written anywhere.
@@ -241,16 +245,7 @@ async def hybrid_container(monkeypatch: pytest.MonkeyPatch, clean_neo4j):
         yield container
     finally:
         await container.aclose()
-        admin = AsyncQdrantClient(url=settings.stores.qdrant.url, prefer_grpc=False, timeout=10)
-        try:
-            for name in (
-                settings.retrieval.vector.collection,
-                settings.resolution.collection,
-            ):
-                with contextlib.suppress(Exception):
-                    await admin.delete_collection(name)
-        finally:
-            await admin.close()
+        await _drop_qdrant(settings)
 
 
 async def _seed_hybrid_corpus(container: Container) -> list:

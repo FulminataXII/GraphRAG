@@ -19,6 +19,8 @@ from graphrag.core.models import SparseVector
 from graphrag.services.retrieval.vector import VectorRetriever
 from tests.factories import make_chunk, make_source_ref
 from tests.fakes import FakeCache, FakeDocumentLedger, FakeVectorStore
+from tests.integration import namespaces as ns
+from tests.integration.conftest import drop_collections
 from tests.unit._settings_helpers import set_required_secrets
 
 pytestmark = pytest.mark.integration
@@ -30,13 +32,10 @@ _DIM = 4  # small, hand-legible dense vectors -- same convention as test_qdrant_
 @pytest.fixture
 def vector_settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
     set_required_secrets(monkeypatch)
-    suffix = uuid.uuid4().hex[:8]
-    base = Settings()
-    vector = base.retrieval.vector.model_copy(update={"collection": f"test_retr_chunks_{suffix}"})
-    retrieval = base.retrieval.model_copy(update={"vector": vector})
+    base = ns.namespaced(Settings(), local=uuid.uuid4().hex[:8])
     dense = base.embedding.dense.model_copy(update={"dimensions": _DIM})
     embedding = base.embedding.model_copy(update={"dense": dense})
-    return base.model_copy(update={"retrieval": retrieval, "embedding": embedding})
+    return base.model_copy(update={"embedding": embedding})
 
 
 @pytest.fixture
@@ -51,7 +50,7 @@ async def store(
     qdrant_client: AsyncQdrantClient, vector_settings: Settings
 ) -> AsyncIterator[QdrantVectorStore]:
     yield QdrantVectorStore(qdrant_client, vector_settings)
-    await qdrant_client.delete_collection(vector_settings.retrieval.vector.collection)
+    await drop_collections(qdrant_client, vector_settings.retrieval.vector.collection)
 
 
 class _ScriptedEmbedder:

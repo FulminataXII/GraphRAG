@@ -52,6 +52,43 @@ services:
       retries: 20
       start_period: 30s
 
+  # Integration-test Neo4j. A SECOND instance, not a second database: Neo4j Community Edition
+  # supports exactly one user database (`CREATE DATABASE` answers "Unsupported administration
+  # command"), so there is no per-run database to namespace into and `MATCH (n) DETACH DELETE n`
+  # in a fixture would always be aimed at the same graph the corpus lives in. That is what
+  # silently destroyed an ingested corpus once already. A separate instance on its own port and
+  # its own volume is the namespace: `tests/integration/namespaces.py` points every integration
+  # fixture here, and nothing else in the repo names port 7688, so a test cannot reach the real
+  # graph even if a fixture is wrong.
+  #
+  # `test` profile, so `make up` does NOT start it — only `make test-int` does. Sized down hard
+  # (256m heap / 128m pagecache against the real instance's 1g/256M): integration graphs are a
+  # few dozen nodes, and this has to fit alongside the obs plane during `make test-int`.
+  neo4j-test:
+    image: neo4j:5-community
+    profiles: [test]
+    ports:
+      - "7475:7474"
+      - "7688:7687"
+    environment:
+      NEO4J_AUTH: ${NEO4J_AUTH}
+      NEO4J_server_memory_heap_max__size: 256m
+      NEO4J_server_memory_pagecache_size: 128M
+    volumes:
+      - neo4j_test_data:/data
+    # 900m, not the 700m first tried: with heap 256m + pagecache 128m the container still
+    # measured 581MiB under `make test-int` (83% of a 700m ceiling), and the remainder is JVM
+    # overhead that does not shrink on demand. Host headroom is not the constraint here — the
+    # minimum available during a full `make up obs=1 && make test-int` run was 1.7GiB — so the
+    # cgroup ceiling is the only thing that could OOM-kill this, and 900m leaves it ~35% clear.
+    mem_limit: 900m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:7474 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
   postgres:
     image: postgres:16
     profiles: [core]
@@ -288,4 +325,5 @@ services:
 volumes:
   qdrant_data:
   neo4j_data:
+  neo4j_test_data:
   postgres_data:
