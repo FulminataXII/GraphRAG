@@ -21,22 +21,25 @@ from __future__ import annotations
 
 import asyncio
 import json
+import socket
 import textwrap
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Final
+from urllib.parse import urlparse
 from uuid import UUID
 
 import magic
 import typer
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 from pydantic_core import to_jsonable_python
+from sqlalchemy.exc import DBAPIError
 
 from graphrag.adapters.telemetry.trail import TrailBuilder
 from graphrag.apps._upload_storage import persist_upload
 from graphrag.apps.api.main import Container
-from graphrag.config.settings import get_settings
+from graphrag.config.settings import Settings, get_settings
 from graphrag.core.events import IngestDocumentPayload, JobEnvelope
 from graphrag.core.ids import chunk_id, new_correlation_id
 from graphrag.core.models import DocumentStatus, GraphPath, ScoredChunk, Spend
@@ -76,6 +79,77 @@ def _callback() -> None:
     """
 
 
+# ---------------------------------------------------------------------------
+# host-side settings
+# ---------------------------------------------------------------------------
+#: Compose service names that only resolve from INSIDE the compose network. `config/local.yaml`
+#: already rewrites `stores.qdrant`/`stores.neo4j`/`stores.redis` and `llm.gateway_base_url` to
+#: the published localhost ports for exactly this reason. Postgres cannot be rewritten there:
+#: its DSN lives in `secrets`, which is populated ONLY from env/.env and has no YAML leaf — so
+#: the same rewrite has to happen here, in the one process that is always host-side.
+_COMPOSE_ONLY_HOSTS: Final[frozenset[str]] = frozenset({"postgres", "qdrant", "neo4j", "redis"})
+
+
+def _resolves(hostname: str) -> bool:
+    try:
+        socket.getaddrinfo(hostname, None)
+    except OSError:
+        return False
+    return True
+
+
+def cli_settings() -> Settings:
+    """`get_settings()`, with the Postgres DSN pointed somewhere this process can actually reach.
+
+    Every CLI command runs on the HOST, outside the compose network, where `.env`'s
+    `postgresql://...@postgres:5432/graphrag` cannot resolve — and the failure was a raw
+    `gaierror` from deep inside asyncpg, which says nothing about what to do. `make migrate`
+    works around it by exporting a localhost DSN inline; requiring that of every `graphrag node`
+    invocation is ceremony M-5 would pay fifty times over.
+
+    The rewrite is conditional on the name not resolving, so it cannot hijack a DSN that points
+    at a real host, and it announces itself on stderr rather than silently changing where a
+    command writes.
+    """
+    settings = get_settings()
+    dsn = settings.secrets.postgres_dsn.get_secret_value()
+    hostname = urlparse(dsn).hostname
+    if hostname is None or hostname not in _COMPOSE_ONLY_HOSTS or _resolves(hostname):
+        return settings
+
+    rewritten = dsn.replace(f"@{hostname}:", "@localhost:", 1)
+    typer.echo(
+        f"note: postgres host {hostname!r} is a compose service name and does not resolve on "
+        "this machine; using localhost instead",
+        err=True,
+    )
+    return settings.model_copy(
+        update={
+            "secrets": settings.secrets.model_copy(update={"postgres_dsn": SecretStr(rewritten)})
+        }
+    )
+
+
+async def open_container(settings: Settings) -> Container:
+    """`Container.create`, with a connection failure translated into an actionable message.
+
+    `Container.create` opens Postgres, Redis, Qdrant and Neo4j clients; when the stack is down
+    the first one to fail surfaces as a bare `OSError`/`DBAPIError` under a Typer traceback,
+    which reads as a bug in the CLI rather than "the containers aren't running".
+    """
+    try:
+        return await Container.create(settings)
+    except (OSError, DBAPIError) as exc:
+        typer.echo(
+            f"cannot reach a backing store: {type(exc).__name__}: {str(exc).splitlines()[0]}\n"
+            "The CLI talks to the docker-compose stack over the published localhost ports. "
+            "Start it with `make up` (add `obs=1` for the observability plane) and, if this is "
+            "a fresh database, `make migrate`.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+
+
 @app.command()
 def trail(
     correlation_id: Annotated[
@@ -87,7 +161,7 @@ def trail(
     ] = None,
 ) -> None:
     """Build a paste-ready debug bundle for CORRELATION_ID and write it to disk."""
-    settings = get_settings()
+    settings = cli_settings()
     output_path = out or Path(f"debug_bundle_{correlation_id}.md")
 
     async def _run() -> None:
@@ -174,11 +248,11 @@ def ingest(
     ] = False,
 ) -> None:
     """Ingest a file or directory through the same pipeline as `POST /v1/documents`."""
-    settings = get_settings()
+    settings = cli_settings()
     files = _collect_files(path, recursive=recursive)
 
     async def _run() -> None:
-        container = await Container.create(settings)
+        container = await open_container(settings)
         try:
             await _ingest_paths(container, files, wait=wait)
         finally:
@@ -190,11 +264,11 @@ def ingest(
 @app.command()
 def seed() -> None:
     """Ingest `corpus/` (MANUAL M-2's seed corpus)."""
-    settings = get_settings()
+    settings = cli_settings()
     files = _collect_files(Path("corpus"), recursive=True)
 
     async def _run() -> None:
-        container = await Container.create(settings)
+        container = await open_container(settings)
         try:
             await _ingest_paths(container, files, wait=False)
         finally:
@@ -234,10 +308,10 @@ def query(
             f"strategy={strategy!r} is not implemented until BO-09/10; using vector", err=True
         )
 
-    settings = get_settings()
+    settings = cli_settings()
 
     async def _run() -> None:
-        container = await Container.create(settings)
+        container = await open_container(settings)
         try:
             embedder = container.embedder
             vector_store = container.vector_store
@@ -298,12 +372,12 @@ def reindex(
     check.
     """
     del force  # see docstring — no separate code path yet
-    settings = get_settings()
+    settings = cli_settings()
     parser = DocumentParser()
     files = _collect_files(corpus_dir, recursive=True)
 
     async def _run() -> None:
-        container = await Container.create(settings)
+        container = await open_container(settings)
         try:
             all_ids = set()
             for file_path in files:
@@ -585,10 +659,10 @@ def node(
         raise typer.BadParameter(f"strategy must be vector|graph|hybrid, got {strategy!r}")
 
     pinned = [UUID(value.strip()) for value in chunk_ids.split(",")] if chunk_ids else []
-    settings = get_settings()
+    settings = cli_settings()
 
     async def _run() -> None:
-        container = await Container.create(settings)
+        container = await open_container(settings)
         try:
             assert container.orchestrator is not None
             recorder = _RecordingLLM(container.orchestrator.deps.llm, settings.llm)
