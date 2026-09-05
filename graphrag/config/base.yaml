@@ -164,7 +164,14 @@ llm:
   # request before the fallback it depends on is ever tried.
   roles:
     router: { model: fast-low-latency, temperature: 0.0, max_tokens: 800, timeout_s: 60 }
-    grader: { model: fast-low-latency, temperature: 0.0, max_tokens: 300, timeout_s: 60 }
+    # 300 was never enough and the grader has therefore never graded anything. `grade_context`
+    # returns a verdict + a <=200-char reason per chunk for `orchestration.grader.batch_size: 8`
+    # chunks, and `fast-low-latency` is a reasoning model: measured against Groq directly, one
+    # batch of 8 spends 439 tokens on reasoning BEFORE the first grade and 868 in total. At 300
+    # the provider rejects the whole completion (`json_validate_failed`), the node fails open,
+    # and every chunk passes through ungraded. 1200 covers the measured 868 with room for the
+    # reasoning variance seen across runs (346-534).
+    grader: { model: fast-low-latency, temperature: 0.0, max_tokens: 1200, timeout_s: 60 }
     # 32000 output tokens in one batched extraction call — this role is why the global ceiling
     # is 300 in the first place.
     bulk: { model: bulk-high-tpm, temperature: 0.1, max_tokens: 32000, timeout_s: 300 }

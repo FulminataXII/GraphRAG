@@ -106,3 +106,82 @@ async def test_each_node_is_pure(container: Any):
             assert state_copy == state, (
                 f"{node_func.__name__} mutated the input state before raising an error!"
             )
+
+
+async def test_grader_schema_violation_is_reported_not_just_swallowed(container: Any):
+    """A grader that cannot grade must SAY so.
+
+    `orchestration.grader.fail_open: true` is a defensible choice — a broken grader should not
+    take the query down. Failing open *silently* is not: every chunk is passed through ungraded,
+    `orchestration.min_relevant_docs` is then trivially satisfied, `route_after_grade` never
+    routes to `rewrite_query`, and the response looks identical to a query whose context really
+    was relevant. The self-correction loop has a limb that cannot move and nothing says so.
+
+    So the pass-through stays, and a `NodeFailure` plus a `degraded` entry are recorded alongside
+    it — the same contract `retrieve_vector`/`retrieve_graph` already honour for their backends.
+    """
+    from graphrag.core.errors import LLMSchemaViolation
+    from graphrag.core.models import ScoredChunk
+    from tests.factories import make_chunk
+
+    deps = container.orchestrator.deps
+    container.llm_client.script_structured("grader", LLMSchemaViolation("unparseable"))
+
+    fused = [
+        ScoredChunk(chunk=make_chunk(f"chunk {i}"), score=1.0 - i / 10, rank=i, origin="vector")
+        for i in range(1, 4)
+    ]
+    state = {
+        "correlation_id": "cid",
+        "question": "what?",
+        "active_query": "what?",
+        "fused": fused,
+        "graded": [],
+        "degraded": [],
+        "failures": [],
+        "attempts": {},
+    }
+
+    update = await grade_context.node(state, deps)
+
+    # Fail-open behaviour is unchanged: nothing is dropped.
+    assert [c.chunk.chunk_id for c in update["graded"]] == [c.chunk.chunk_id for c in fused]
+
+    # ...but it is now visible.
+    assert update["degraded"] == ["grader"]
+    assert [f.node for f in update["failures"]] == ["grade_context"]
+    assert update["failures"][0].code == LLMSchemaViolation.code
+    assert update["failures"][0].attempt == 1
+
+
+async def test_grader_degraded_is_recorded_once_across_batches(container: Any):
+    """`degraded` is `Annotated[list[str], operator.add]`, so a per-batch append would write
+    "grader" once per batch and make a two-batch query look twice as broken as a one-batch one."""
+    from graphrag.core.errors import LLMSchemaViolation
+    from graphrag.core.models import ScoredChunk
+    from tests.factories import make_chunk
+
+    deps = container.orchestrator.deps
+    batch_size = deps.settings.orchestration.grader.batch_size
+    for _ in range(3):
+        container.llm_client.script_structured("grader", LLMSchemaViolation("unparseable"))
+
+    fused = [
+        ScoredChunk(chunk=make_chunk(f"chunk {i}"), score=1.0, rank=i, origin="vector")
+        for i in range(batch_size + 2)
+    ]
+    state = {
+        "correlation_id": "cid",
+        "question": "what?",
+        "active_query": "what?",
+        "fused": fused,
+        "graded": [],
+        "degraded": [],
+        "failures": [],
+        "attempts": {},
+    }
+
+    update = await grade_context.node(state, deps)
+
+    assert update["degraded"] == ["grader"]
+    assert len(update["failures"]) == 2  # one per batch, so the count is still legible
