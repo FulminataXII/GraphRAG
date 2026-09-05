@@ -40,6 +40,62 @@ def _arq_task_functions(module: object) -> list[str]:
     return names
 
 
+def _registered_paths(worker_settings_module: object) -> list[str]:
+    """Every arq-registered task path across BOTH worker settings classes.
+
+    BLUEPRINT §7.2 requires these to be import-STRING paths, not function objects: "keep
+    `WorkerSettings`'s import chain lazy (register tasks as import-string paths, defer
+    `Container` construction into `on_startup`)". Registering objects instead forces eager
+    top-level imports of every task module, and `arq --check` re-imports this module in a fresh
+    subprocess on every healthcheck — which is what the 20s compose timeout is sized against.
+    Asserting the shape here is deliberate: an earlier version of this file read `fn.__name__`,
+    which only works on objects, and that is what pushed `settings.py` into violating §7.2.
+    """
+    paths = [
+        *worker_settings_module.WorkerSettings.functions,  # type: ignore[attr-defined]
+        *worker_settings_module.ProjectionWorkerSettings.functions,  # type: ignore[attr-defined]
+    ]
+    for entry in paths:
+        assert isinstance(entry, str), (
+            f"{entry!r} is registered as an object, not an import-string path — BLUEPRINT §7.2 "
+            "requires import-string paths so this module's import chain stays lazy."
+        )
+    return paths
+
+
+def _task_name(path: str) -> str:
+    """The arq task name: the last dotted segment of an import-string path.
+
+    arq registers a string-path function under that final segment, which is the same short name
+    the API enqueues with (`job_queue.enqueue("ingest_document", ...)`).
+    """
+    return path.rsplit(".", 1)[-1]
+
+
+def _resolve(path: str) -> object:
+    """Import `path` and return the attribute it names, asserting it exists and is callable.
+
+    Strictly stronger than the `fn.__name__` check this replaced. A typo'd import string
+    registers nothing: arq drops every job for that task with no error the enqueuing caller
+    sees — precisely the silent-drop failure this guard exists to catch. Reading `__name__` off
+    a function object could never have caught a typo, because a typo'd string never became a
+    function object in the first place.
+    """
+    module_path, _, attr = path.rpartition(".")
+    assert module_path, f"{path!r} is not a dotted import path"
+    try:
+        module = importlib.import_module(module_path)
+    except ModuleNotFoundError as exc:
+        raise AssertionError(f"{path!r} names a module that does not exist: {exc}") from exc
+    resolved = getattr(module, attr, None)
+    assert resolved is not None, (
+        f"{path!r} resolves to no attribute on {module_path} — arq would register nothing and "
+        "silently drop every job enqueued under that name"
+    )
+    assert callable(resolved), f"{path!r} resolves to {resolved!r}, which is not callable"
+    return resolved
+
+
 @pytest.fixture
 def worker_settings_module(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("APP_ENV", "test")
@@ -61,13 +117,20 @@ def test_projection_worker_queue_name_from_config(worker_settings_module) -> Non
 
 
 def test_worker_settings_functions_registered(worker_settings_module) -> None:
-    names = {fn.__name__ for fn in worker_settings_module.WorkerSettings.functions}
-    assert names == {
+    """The main queue registers exactly its four tasks, by resolvable import-string path."""
+    paths = list(worker_settings_module.WorkerSettings.functions)
+    for entry in paths:
+        assert isinstance(entry, str), (
+            f"{entry!r} is registered as an object, not an import-string path (BLUEPRINT §7.2)"
+        )
+    assert {_task_name(path) for path in paths} == {
         "ingest_document",
         "extract_entities",
         "resolve_entities",
         "delete_document",
     }
+    for path in paths:
+        _resolve(path)
 
 
 def test_worker_settings_max_tries_from_dead_letter_config(worker_settings_module) -> None:
@@ -90,6 +153,9 @@ def test_every_task_module_function_is_registered(worker_settings_module) -> Non
     (a hardcoded set naming only the four functions it already knew about); this test is derived
     from the `tasks/` directory instead, so a fifth task file added later — registered in
     EITHER `WorkerSettings` or `ProjectionWorkerSettings` — can't repeat this silently.
+
+    Registrations are import-string paths (BLUEPRINT §7.2), so this compares the last dotted
+    segment and separately asserts each path resolves — see `_resolve`.
     """
     tasks_dir = Path(importlib.import_module(_TASKS_PACKAGE).__file__).parent
     task_module_names = sorted(
@@ -97,13 +163,13 @@ def test_every_task_module_function_is_registered(worker_settings_module) -> Non
     )
     assert task_module_names, "expected at least one task module under apps/worker/tasks/"
 
-    registered = {
-        fn.__name__
-        for fn in [
-            *worker_settings_module.WorkerSettings.functions,
-            *worker_settings_module.ProjectionWorkerSettings.functions,
-        ]
-    }
+    registered_paths = _registered_paths(worker_settings_module)
+    registered = {_task_name(path) for path in registered_paths}
+
+    # Every registered path must actually resolve. A path that doesn't is worse than an
+    # unregistered task: it LOOKS registered.
+    for path in registered_paths:
+        _resolve(path)
 
     for module_name in task_module_names:
         module = importlib.import_module(f"{_TASKS_PACKAGE}.{module_name}")
