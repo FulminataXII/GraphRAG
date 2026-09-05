@@ -9,18 +9,29 @@ pipeline (`POST /v1/query`) — that depends on `services/retrieval` and `servic
 which don't exist until BO-09/10. It exists now because MANUAL M-5 needs it before BO-11:
 `--show-chunk-ids` is how `gold_chunk_ids` get collected without anyone transcribing a UUID off
 a screen.
+
+`node` (added for the same reason, one BO later) runs ONE orchestration node against real
+`NodeDeps` and prints what it returned plus the LLM calls it made. BLUEPRINT §6.6 calls the
+nodes independently testable — they are plain `async def node(state, deps) -> dict` — but
+nothing exposed that to a person, so tuning a router or grader prompt meant a full end-to-end
+query: four LLM calls and ~25s per iteration. See `node`'s own docstring for the prefill rules.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import textwrap
+import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any, Final
+from uuid import UUID
 
 import magic
 import typer
+from pydantic import BaseModel
+from pydantic_core import to_jsonable_python
 
 from graphrag.adapters.telemetry.trail import TrailBuilder
 from graphrag.apps._upload_storage import persist_upload
@@ -28,10 +39,27 @@ from graphrag.apps.api.main import Container
 from graphrag.config.settings import get_settings
 from graphrag.core.events import IngestDocumentPayload, JobEnvelope
 from graphrag.core.ids import chunk_id, new_correlation_id
-from graphrag.core.models import DocumentStatus
+from graphrag.core.models import DocumentStatus, GraphPath, ScoredChunk, Spend
+from graphrag.core.ports import LLMClient
 from graphrag.services.ingestion.chunker import chunk_document
 from graphrag.services.ingestion.parser import DocumentParser
 from graphrag.services.ingestion.service import ProjectionService, document_id, document_sha256
+from graphrag.services.orchestration.nodes import (
+    finalize,
+    fuse,
+    generate,
+    grade_context,
+    guard,
+    insufficient,
+    plan_route,
+    repair,
+    retrieve_graph,
+    retrieve_vector,
+    rewrite_query,
+    verify_citations,
+    verify_grounded,
+)
+from graphrag.services.orchestration.state import merge_counters
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
@@ -298,6 +326,345 @@ def reindex(
             )
             await projection.project(list(all_ids))
             typer.echo(f"re-projected {len(all_ids)} chunk(s) from {len(files)} file(s)")
+        finally:
+            await container.aclose()
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# `node` — run ONE orchestration node by hand. See this module's docstring.
+# ---------------------------------------------------------------------------
+
+#: Every node in BLUEPRINT §6.4's graph, by the name `build_query_graph` registers it under.
+#: Imported explicitly rather than walked: `nodes/` is a namespace package, so an attribute
+#: lookup would only find the submodules some other import happened to have loaded already.
+_NODES: Final[dict[str, Any]] = {
+    "guard": guard,
+    "plan_route": plan_route,
+    "retrieve_vector": retrieve_vector,
+    "retrieve_graph": retrieve_graph,
+    "fuse": fuse,
+    "grade_context": grade_context,
+    "rewrite_query": rewrite_query,
+    "generate": generate,
+    "verify_citations": verify_citations,
+    "verify_grounded": verify_grounded,
+    "repair": repair,
+    "finalize": finalize,
+    "insufficient": insufficient,
+}
+
+#: Which upstream nodes have to run before the target node's inputs are valid. Derived from
+#: BLUEPRINT §6.4's edge list, not invented: it is the path from START to the target, minus the
+#: branches a straight-line hand run never takes (`rewrite_query`, `repair`).
+#:
+#: `grade_context` is deliberately NOT on any path. Grading is itself a graded LLM call, and a
+#: node being iterated against a hand-picked context wants that context ungraded — so after
+#: `fuse`, `graded` is seeded from `fused` and the substitution is printed.
+_UPSTREAM: Final[dict[str, tuple[str, ...]]] = {
+    "guard": (),
+    "plan_route": (),
+    "rewrite_query": (),
+    "finalize": (),
+    "retrieve_vector": ("plan_route",),
+    "retrieve_graph": ("plan_route",),
+    "fuse": ("plan_route", "retrieve_vector", "retrieve_graph"),
+    "grade_context": ("plan_route", "retrieve_vector", "retrieve_graph", "fuse"),
+    "generate": ("plan_route", "retrieve_vector", "retrieve_graph", "fuse"),
+    "insufficient": ("plan_route", "retrieve_vector", "retrieve_graph", "fuse"),
+    "verify_citations": ("plan_route", "retrieve_vector", "retrieve_graph", "fuse", "generate"),
+    "verify_grounded": ("plan_route", "retrieve_vector", "retrieve_graph", "fuse", "generate"),
+    "repair": ("plan_route", "retrieve_vector", "retrieve_graph", "fuse", "generate"),
+}
+
+#: Upstream nodes that only exist to produce retrieved context. `--chunk-ids` supplies that
+#: context directly, so these are skipped when it is given.
+_RETRIEVAL_NODES: Final[frozenset[str]] = frozenset(
+    {"plan_route", "retrieve_vector", "retrieve_graph", "fuse"}
+)
+
+
+class _RecordingLLM:
+    """Delegates to the real client and remembers what each call cost.
+
+    `StructuredResult` already carries `model_served`/tokens/latency — `model_served` is how a
+    provider fallback becomes visible, since it is the model the gateway ACTUALLY served, not
+    the alias asked for. What it does not carry is the role or the alias, which is why this
+    wrapper (which knows both) exists rather than the command reading the result alone.
+    """
+
+    def __init__(self, inner: LLMClient, llm_settings: Any) -> None:
+        self._inner = inner
+        self._llm = llm_settings
+        self.calls: list[dict[str, Any]] = []
+
+    async def structured(
+        self, *, role: str, messages: list[dict[str, str]], schema: type, max_repairs: int
+    ) -> Any:
+        alias = self._llm.roles[role].model
+        started = time.perf_counter()
+        try:
+            result = await self._inner.structured(
+                role=role, messages=messages, schema=schema, max_repairs=max_repairs
+            )
+        except Exception as exc:
+            self.calls.append(
+                {
+                    "role": role,
+                    "alias": alias,
+                    "model_served": None,
+                    "prompt_tokens": None,
+                    "completion_tokens": None,
+                    "repair_attempts": None,
+                    "latency_ms": int((time.perf_counter() - started) * 1000),
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            raise
+        self.calls.append(
+            {
+                "role": role,
+                "alias": alias,
+                "model_served": result.model_served,
+                "prompt_tokens": result.prompt_tokens,
+                "completion_tokens": result.completion_tokens,
+                "repair_attempts": result.repair_attempts,
+                "latency_ms": result.latency_ms,
+                "error": None,
+            }
+        )
+        return result
+
+    def stream_text(self, *, role: str, messages: list[dict[str, str]]) -> Any:
+        return self._inner.stream_text(role=role, messages=messages)
+
+    async def health(self) -> bool:
+        return await self._inner.health()
+
+
+def _seed_state(question: str, top_k: int | None, strategy: str | None) -> dict[str, Any]:
+    """The same channel seed `OrchestrationService.run` builds. Kept identical on purpose: a
+    node inspected here must see the state shape it sees in production."""
+    return {
+        "correlation_id": new_correlation_id(),
+        "question": question,
+        "active_query": question,
+        "plan": None,
+        "top_k": top_k,
+        "strategy_override": strategy,
+        "vector_hits": [],
+        "graph_hits": [],
+        "fused": [],
+        "graded": [],
+        "answer": None,
+        "degraded": [],
+        "failures": [],
+        "attempts": {},
+        "spent": Spend(),
+    }
+
+
+def _apply(state: dict[str, Any], update: dict[str, Any]) -> None:
+    """Merge a node's partial update into the state using QueryState's own reducers.
+
+    LangGraph applies these; running a node outside the graph means applying them here. Getting
+    them wrong would make a prefilled state diverge from the one production builds — `attempts`
+    especially, which several nodes read to number their own failures.
+    """
+    for key, value in update.items():
+        if key == "spent":
+            state["spent"] = Spend.merge(state.get("spent", Spend()), value)
+        elif key == "attempts":
+            state["attempts"] = merge_counters(state.get("attempts", {}), value)
+        elif key in ("degraded", "failures"):
+            state[key] = state.get(key, []) + value
+        else:
+            state[key] = value
+
+
+def _summarize(update: dict[str, Any]) -> str:
+    """Human-readable rendering of a partial state update.
+
+    Chunk lists are printed as one line each rather than dumped whole: `fused` alone is ten
+    chunks of up to 900 characters, which buries the field a person is actually reading. `--json`
+    prints everything.
+    """
+    lines: list[str] = []
+    for key, value in update.items():
+        if isinstance(value, list) and value and isinstance(value[0], ScoredChunk):
+            lines.append(f"{key}: {len(value)} chunk(s)")
+            for scored in value:
+                text = scored.chunk.text[:110].replace("\n", " ")
+                lines.append(
+                    f"  [{scored.chunk.chunk_id}] rank={scored.rank} "
+                    f"score={scored.score:.4f} origin={scored.origin} {text}"
+                )
+        elif isinstance(value, list) and value and isinstance(value[0], GraphPath):
+            lines.append(f"{key}: {len(value)} path(s)")
+            for path in value:
+                lines.append(f"  score={path.score:.4f} chunks={len(path.chunks)}")
+        elif isinstance(value, BaseModel):
+            lines.append(f"{key}:")
+            lines.append(textwrap.indent(json.dumps(value.model_dump(mode="json"), indent=2), "  "))
+        else:
+            lines.append(f"{key}: {json.dumps(to_jsonable_python(value))}")
+    return "\n".join(lines)
+
+
+#: A LiteLLM gateway error carries the whole fallback chain's nested exception text — several
+#: thousand characters that push the rest of the run off the screen. `--json` keeps it whole.
+_ERROR_PREVIEW_CHARS: Final[int] = 400
+
+
+def _print_calls(calls: list[dict[str, Any]]) -> None:
+    if not calls:
+        typer.echo("llm calls: none")
+        return
+    typer.echo(f"llm calls: {len(calls)}")
+    for call in calls:
+        if call["error"] is not None:
+            message = " ".join(call["error"].split())
+            if len(message) > _ERROR_PREVIEW_CHARS:
+                message = f"{message[:_ERROR_PREVIEW_CHARS]}... (--json for the full error)"
+            typer.echo(
+                f"  role={call['role']} alias={call['alias']} "
+                f"latency={call['latency_ms']}ms FAILED {message}"
+            )
+            continue
+        typer.echo(
+            f"  role={call['role']} alias={call['alias']} "
+            f"model_served={call['model_served']} "
+            f"tokens={call['prompt_tokens']}p/{call['completion_tokens']}c "
+            f"repairs={call['repair_attempts']} latency={call['latency_ms']}ms"
+        )
+
+
+@app.command()
+def node(
+    name: Annotated[str, typer.Argument(help="Node to run, e.g. plan_route / grade_context.")],
+    question: Annotated[str, typer.Option("--question", help="The user's question.")],
+    chunk_ids: Annotated[
+        str | None,
+        typer.Option(
+            "--chunk-ids",
+            help="Comma-separated chunk UUIDs to use as the context, instead of retrieving.",
+        ),
+    ] = None,
+    top_k: Annotated[
+        int | None, typer.Option("--top-k", help="Override retrieval.vector.top_k.")
+    ] = None,
+    strategy: Annotated[
+        str | None,
+        typer.Option("--strategy", help="strategy_override: vector | graph | hybrid."),
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Print the full update and call log as JSON.")
+    ] = False,
+) -> None:
+    """Run ONE orchestration node against real dependencies and print what it returned.
+
+    Nodes are `async def node(state, deps) -> dict` (BLUEPRINT §6.6); this constructs a valid
+    `QueryState`, calls one, and prints the partial update plus every LLM call made — role,
+    alias, model ACTUALLY served (which is how a provider fallback becomes visible), token
+    counts and latency.
+
+    A node downstream of retrieval needs retrieved context to be worth running, so the upstream
+    nodes that produce it are run first and named in the output; `--chunk-ids` supplies that
+    context directly instead. Retrieval spends no LLM quota here (fastembed and both stores are
+    local), so the whole prefill costs at most the one `plan_route` call at `fast-low-latency`.
+
+    There is no `--chunks-from <correlation_id>`, though iterating on a past query is the
+    obvious thing to want: NOTHING in this system is keyed by correlation_id — no Postgres row,
+    no Redis key, no span attribute carrying the question or the chunk ids. Reported as a spec
+    gap rather than worked around here.
+    """
+    if name not in _NODES:
+        raise typer.BadParameter(f"unknown node {name!r}; one of: {', '.join(sorted(_NODES))}")
+    if strategy is not None and strategy not in ("vector", "graph", "hybrid"):
+        raise typer.BadParameter(f"strategy must be vector|graph|hybrid, got {strategy!r}")
+
+    pinned = [UUID(value.strip()) for value in chunk_ids.split(",")] if chunk_ids else []
+    settings = get_settings()
+
+    async def _run() -> None:
+        container = await Container.create(settings)
+        try:
+            assert container.orchestrator is not None
+            recorder = _RecordingLLM(container.orchestrator.deps.llm, settings.llm)
+            deps = container.orchestrator.deps.model_copy(update={"llm": recorder})
+
+            state = _seed_state(question, top_k, strategy)
+            upstream = _UPSTREAM[name]
+            if pinned:
+                assert container.vector_store is not None
+                chunks = await container.vector_store.get_chunks(pinned)
+                missing = set(pinned) - {c.chunk_id for c in chunks}
+                if missing:
+                    typer.echo(
+                        f"warning: {len(missing)} chunk id(s) not in "
+                        f"{settings.retrieval.vector.collection}: "
+                        f"{', '.join(str(m) for m in sorted(missing, key=str))}",
+                        err=True,
+                    )
+                scored = [
+                    ScoredChunk(chunk=chunk, score=1.0, rank=i, origin="vector")
+                    for i, chunk in enumerate(chunks, start=1)
+                ]
+                state["vector_hits"] = scored
+                state["fused"] = scored
+                state["graded"] = scored
+                upstream = tuple(n for n in upstream if n not in _RETRIEVAL_NODES)
+                typer.echo(f"context: {len(scored)} pinned chunk(s)")
+
+            if upstream:
+                typer.echo(f"prefill: {' -> '.join(upstream)}")
+            for upstream_name in upstream:
+                _apply(state, await _NODES[upstream_name].node(state, deps))
+                if upstream_name == "fuse":
+                    # `generate`/`verify_*` read `graded`, and grading is an LLM call whose
+                    # result would be this run's input rather than its subject. Substitute and
+                    # say so, rather than handing the node an empty context.
+                    state["graded"] = list(state["fused"])
+                    typer.echo(f"prefill: graded := fused ({len(state['graded'])} chunk(s))")
+
+            prefill_calls = list(recorder.calls)
+            recorder.calls.clear()
+
+            typer.echo(f"\n=== {name} ===")
+            # A node that raises is a RESULT here, not a crash: `generate` letting an
+            # LLMSchemaViolation out is exactly the kind of thing this command exists to show,
+            # and Typer's traceback would bury the call log that says which role and which model
+            # produced it. Print the log, then exit non-zero.
+            try:
+                update = await _NODES[name].node(state, deps)
+            except Exception as exc:
+                typer.echo(f"raised {type(exc).__name__}: {exc}", err=True)
+                typer.echo("")
+                _print_calls(recorder.calls)
+                raise typer.Exit(code=1) from None
+
+            if as_json:
+                typer.echo(
+                    json.dumps(
+                        {
+                            "node": name,
+                            "correlation_id": state["correlation_id"],
+                            "prefill": list(upstream),
+                            "prefill_llm_calls": prefill_calls,
+                            "update": to_jsonable_python(update),
+                            "llm_calls": recorder.calls,
+                        },
+                        indent=2,
+                    )
+                )
+                return
+
+            typer.echo(_summarize(update) or "(empty update)")
+            typer.echo("")
+            _print_calls(recorder.calls)
+            if prefill_calls:
+                typer.echo(f"(prefill additionally made {len(prefill_calls)} llm call(s))")
         finally:
             await container.aclose()
 
