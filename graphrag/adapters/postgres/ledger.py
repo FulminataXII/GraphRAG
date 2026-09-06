@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from graphrag.adapters.postgres.tables import corpus_version_counter, documents
@@ -129,6 +129,27 @@ class PostgresDocumentLedger:
                     updated_at=datetime.now(UTC),
                 )
             )
+
+    async def purge(self, doc_id: str) -> bool:
+        """Delete one document's ledger row outright. Returns True if a row was removed.
+
+        Deliberately NOT on the `core.ports.DocumentLedger` Protocol (BLUEPRINT §3.5), which
+        specifies no row-removal method on purpose: a retained row is what makes a re-upload of
+        deleted content look like the re-upload it is rather than a first-time ingest. That
+        design has one consequence it did not intend — `register()` dedups on `sha256` with no
+        regard for status, so a document that FAILED or was cancelled mid-extraction is skipped
+        by a later `graphrag ingest` exactly like a healthy INDEXED one, and no amount of
+        re-running the folder repairs it.
+
+        This is the escape hatch for that, reachable only from `graphrag ingest --force`. It
+        does NOT touch `chunk_sources`: those rows are content-addressed and re-inserted with
+        ON CONFLICT DO NOTHING, so leaving them is what makes the forced re-ingest skip
+        re-embedding work it has already paid for. There is no foreign key from `chunk_sources`
+        to `documents`, so this cascades nowhere.
+        """
+        async with self._engine.begin() as conn:
+            result = await conn.execute(delete(documents).where(documents.c.doc_id == doc_id))
+            return result.rowcount == 1
 
     async def get(self, doc_id: str) -> DocumentRecord | None:
         async with self._engine.connect() as conn:

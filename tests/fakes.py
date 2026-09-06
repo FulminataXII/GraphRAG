@@ -403,6 +403,7 @@ class FakeJobQueue:
     def __init__(self, id_generator: FakeIdGenerator | None = None) -> None:
         self._id_generator = id_generator or FakeIdGenerator()
         self.enqueued: list[dict[str, Any]] = []
+        self.dropped: list[str] = []
         self._status: dict[str, JobStatus] = {}
 
     async def enqueue(
@@ -426,6 +427,11 @@ class FakeJobQueue:
             error=None,
         )
         return resolved_id
+
+    async def drop_job(self, job_id: str) -> None:
+        """Mirrors `ArqJobQueue.drop_job` — clears arq's retained per-job keys."""
+        self.dropped.append(job_id)
+        self._status.pop(job_id, None)
 
     async def status(self, job_id: str) -> JobStatus:
         return self._status.get(job_id) or JobStatus(
@@ -503,6 +509,15 @@ class FakeDocumentLedger:
         self._records[doc_id] = record.model_copy(
             update={"status": status, "error_code": error_code, "updated_at": self._clock.now()}
         )
+
+    async def purge(self, doc_id: str) -> bool:
+        """Mirrors `PostgresDocumentLedger.purge` — the `graphrag ingest --force` escape hatch.
+        Drops the sha256 index entry too, or a forced re-ingest would still be deduped away."""
+        record = self._records.pop(doc_id, None)
+        if record is None:
+            return False
+        self._by_sha256.pop(record.sha256, None)
+        return True
 
     async def get(self, doc_id: str) -> DocumentRecord | None:
         return self._records.get(doc_id)

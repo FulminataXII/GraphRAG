@@ -26,7 +26,7 @@ import textwrap
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any, Final
+from typing import Annotated, Any, Final, Protocol, runtime_checkable
 from urllib.parse import urlparse
 from uuid import UUID
 
@@ -40,7 +40,8 @@ from graphrag.adapters.telemetry.trail import TrailBuilder
 from graphrag.apps._upload_storage import persist_upload
 from graphrag.apps.api.main import Container
 from graphrag.config.settings import Settings, get_settings
-from graphrag.core.events import IngestDocumentPayload, JobEnvelope
+from graphrag.core.errors import ConflictError
+from graphrag.core.events import INGEST_DOCUMENT, IngestDocumentPayload, JobEnvelope
 from graphrag.core.ids import chunk_id, new_correlation_id
 from graphrag.core.models import DocumentStatus, GraphPath, ScoredChunk, Spend
 from graphrag.core.ports import LLMClient
@@ -180,7 +181,67 @@ def _collect_files(path: Path, *, recursive: bool) -> list[Path]:
     return sorted(p for p in path.glob(pattern) if p.is_file())
 
 
-async def _ingest_paths(container: Container, files: list[Path], *, wait: bool) -> None:
+@runtime_checkable
+class _PurgeableLedger(Protocol):
+    """A ledger that can drop a row outright. Structural, not the concrete adapter class:
+    `purge` is deliberately absent from `core.ports.DocumentLedger` (BLUEPRINT §3.5), but
+    `--force` still has to be testable against a fake rather than only against real Postgres."""
+
+    async def purge(self, doc_id: str) -> bool: ...
+
+
+@runtime_checkable
+class _DroppableQueue(Protocol):
+    """A queue that can clear arq's retained per-job keys. See `_PurgeableLedger`."""
+
+    async def drop_job(self, job_id: str) -> None: ...
+
+
+async def _reset_for_force(
+    container: Container, doc_id: str, file_path: Path, *, even_if_indexed: bool
+) -> bool:
+    """Clear everything that would make a re-ingest of `doc_id` a no-op. True if it may proceed.
+
+    Two independent things suppress a re-ingest, and repairing a partial ingest needs both gone:
+    the ledger row (`register()` dedups on sha256 regardless of status, so a FAILED document is
+    skipped exactly like a healthy one) and arq's retained per-job keys (a finished job's result
+    is kept for `keep_result`, during which re-enqueueing that job_id is silently dropped).
+
+    Refuses an INDEXED document unless `even_if_indexed`. That guard is the point of the
+    command: `--force` re-pays full extraction quota for every document it touches, so pointing
+    it at a healthy corpus by accident must not be one flag away.
+    """
+    ledger = container.ledger
+    job_queue = container.job_queue
+    if not isinstance(ledger, _PurgeableLedger) or not isinstance(job_queue, _DroppableQueue):
+        raise typer.BadParameter(
+            "--force needs a ledger with purge() and a queue with drop_job(); this container "
+            f"has {type(ledger).__name__}/{type(job_queue).__name__}"
+        )
+
+    record = await container.ledger.get(doc_id)
+    if record is not None and record.status is DocumentStatus.INDEXED and not even_if_indexed:
+        typer.echo(
+            f"refusing {file_path} -> doc_id={doc_id} is INDEXED "
+            f"(pass --even-if-indexed to re-ingest it anyway; this re-pays extraction quota)"
+        )
+        return False
+
+    purged = await ledger.purge(doc_id)
+    await job_queue.drop_job(doc_id)
+    was = record.status.value if record is not None else "no ledger row"
+    typer.echo(f"forcing {file_path} -> doc_id={doc_id} (was {was}, row purged={purged})")
+    return True
+
+
+async def _ingest_paths(
+    container: Container,
+    files: list[Path],
+    *,
+    wait: bool,
+    force: bool = False,
+    even_if_indexed: bool = False,
+) -> None:
     settings = container.settings
     doc_ids: list[str] = []
     for file_path in files:
@@ -192,24 +253,39 @@ async def _ingest_paths(container: Container, files: list[Path], *, wait: bool) 
         doc_id = document_id(raw)
         sha256 = document_sha256(raw)
         uri = persist_upload(raw, doc_id)
+        if force and not await _reset_for_force(
+            container, doc_id, file_path, even_if_indexed=even_if_indexed
+        ):
+            continue
         is_new = await container.ledger.register(doc_id, uri, sha256, mime)
         if is_new:
             cid = new_correlation_id()
-            await container.job_queue.enqueue(
-                "ingest_document",
-                JobEnvelope(
-                    correlation_id=cid,
-                    otel={},
-                    enqueued_at=datetime.now(UTC),
-                    payload=IngestDocumentPayload(
-                        doc_id=doc_id, uri=uri, sha256=sha256, mime_type=mime
+            try:
+                await container.job_queue.enqueue(
+                    INGEST_DOCUMENT,
+                    JobEnvelope(
+                        correlation_id=cid,
+                        otel={},
+                        enqueued_at=datetime.now(UTC),
+                        payload=IngestDocumentPayload(
+                            doc_id=doc_id, uri=uri, sha256=sha256, mime_type=mime
+                        ),
                     ),
-                ),
-                job_id=doc_id,
-            )
+                    job_id=doc_id,
+                )
+            except ConflictError as exc:
+                # The ledger row is new but arq still holds keys for this doc_id. Report the
+                # remedy rather than a traceback -- an unreported drop here is exactly the
+                # failure this exception was added to make visible.
+                typer.echo(f"NOT enqueued {file_path} -> doc_id={doc_id}: {exc.message}")
+                continue
             typer.echo(f"enqueued {file_path} -> doc_id={doc_id} cid={cid}")
         else:
-            typer.echo(f"{file_path} already ingested -> doc_id={doc_id}")
+            record = await container.ledger.get(doc_id)
+            status = record.status.value if record is not None else "unknown"
+            # Spell the status out. "already ingested" was printed for FAILED and stuck
+            # in-progress documents too, so a broken corpus read as a clean one.
+            typer.echo(f"skipped {file_path} -> doc_id={doc_id} already registered ({status})")
         doc_ids.append(doc_id)
 
     if wait:
@@ -219,10 +295,10 @@ async def _ingest_paths(container: Container, files: list[Path], *, wait: bool) 
 async def _wait_for_indexed(container: Container, doc_ids: list[str]) -> None:
     """Poll the ledger until every doc_id reaches INDEXED or FAILED.
 
-    Note: until BO-07 (extraction/resolution) lands, no worker function consumes the
-    `extract_entities` jobs `IngestionService` enqueues, so a document's status will stall at
-    EXTRACTING rather than ever reaching INDEXED. `--wait` still polls faithfully per BLUEPRINT
-    §7.3 — Ctrl+C to stop.
+    Both are now genuinely reachable for every terminal outcome, which they were not before: a
+    job cancelled by arq's `job_timeout` used to leave its row at EXTRACTING/RESOLVING forever
+    and this loop would never return. `tasks/_common.py` records FAILED on cancellation, so the
+    two states polled for here really do cover the terminal set. Ctrl+C to stop.
     """
     pending = set(doc_ids)
     while pending:
@@ -246,15 +322,43 @@ def ingest(
         bool,
         typer.Option("--wait", help="Block until each document reaches INDEXED (or FAILED)."),
     ] = False,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help=(
+                "Repair a partial ingest: purge the ledger row and arq's retained job keys for "
+                "each document that is not INDEXED, then re-enqueue it. Re-pays extraction "
+                "quota for every document it touches."
+            ),
+        ),
+    ] = False,
+    even_if_indexed: Annotated[
+        bool,
+        typer.Option(
+            "--even-if-indexed",
+            help="With --force, also re-ingest documents already at INDEXED. Rarely correct.",
+        ),
+    ] = False,
 ) -> None:
-    """Ingest a file or directory through the same pipeline as `POST /v1/documents`."""
+    """Ingest a file or directory through the same pipeline as `POST /v1/documents`.
+
+    Without `--force` this is idempotent and cheap: a document whose content is already
+    registered is skipped, whatever state it is in. That is also its limitation — a document
+    that FAILED, or that was cancelled mid-extraction, is skipped identically to a healthy one,
+    so re-running a folder never repairs a partial ingest. `--force` is how you repair one.
+    """
     settings = cli_settings()
     files = _collect_files(path, recursive=recursive)
+    if even_if_indexed and not force:
+        raise typer.BadParameter("--even-if-indexed only means anything together with --force")
 
     async def _run() -> None:
         container = await open_container(settings)
         try:
-            await _ingest_paths(container, files, wait=wait)
+            await _ingest_paths(
+                container, files, wait=wait, force=force, even_if_indexed=even_if_indexed
+            )
         finally:
             await container.aclose()
 
