@@ -2,17 +2,25 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from arq.worker import Retry
 
 from graphrag.apps.api.main import Container
 from graphrag.apps.worker.tasks.extract import extract_entities, extract_mentions
 from graphrag.apps.worker.tasks.ingest import ingest_document
 from graphrag.apps.worker.tasks.resolve import resolve_entities
+from graphrag.core.errors import (
+    LLMSchemaViolation,
+    RateLimited,
+    ValidationError,
+)
 from graphrag.core.events import (
+    RESOLVE_ENTITIES,
     SCHEMA_VERSION,
     ExtractEntitiesPayload,
     IngestDocumentPayload,
@@ -192,7 +200,7 @@ async def test_extract_entities_reaches_real_extraction_and_enqueues_resolve(
     assert record is not None
     assert record.status == DocumentStatus.RESOLVING
 
-    enqueued = [e for e in container.job_queue.enqueued if e["task"] == "resolve_entities"]
+    enqueued = [e for e in container.job_queue.enqueued if e["task"] == RESOLVE_ENTITIES]
     assert len(enqueued) == 1
     resolve_payload: ResolveEntitiesPayload = enqueued[0]["envelope"].payload
     assert resolve_payload.doc_id == "doc-1"
@@ -320,3 +328,182 @@ async def test_resolve_entities_reaches_real_resolution_and_persists_entities(
     assert len(container.vector_store.entities) == 1
     (persisted,) = container.vector_store.entities.values()
     assert persisted.name == "Acme Corp."
+
+
+# --- job cancellation and retry policy (tasks/_common.py) ---------------------------------
+#
+# These exercise `run_task`'s exception handling through a REAL task (`extract_entities`) and a
+# real ledger fake, rather than calling `run_task` with a synthetic body — the thing under test
+# is that a document's ledger row ends up in the right state, and only the whole path shows that.
+
+
+class _HangingLLM:
+    """Never returns. Stands in for a `bulk` call still running when arq's `job_timeout` fires."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def structured(self, **kwargs: object) -> object:
+        self.calls += 1
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+
+class _RaisingLLM:
+    """Raises a chosen exception from `structured`, once per call."""
+
+    def __init__(self, exc: BaseException) -> None:
+        self._exc = exc
+        self.calls = 0
+
+    async def structured(self, **kwargs: object) -> object:
+        self.calls += 1
+        raise self._exc
+
+
+async def _prepare_extract(container: Container) -> JobEnvelope[ExtractEntitiesPayload]:
+    chunk = _make_chunk("Acme Corp. announced a new product today.")
+    await container.vector_store.upsert_chunks(
+        [chunk], [[0.0] * 8], [SparseVector(indices=[], values=[])]
+    )
+    await container.ledger.register("doc-1", "file:///doc-1.txt", "sha", "text/plain")
+    await container.ledger.set_status("doc-1", DocumentStatus.EXTRACTING)
+    return JobEnvelope(
+        schema_version=SCHEMA_VERSION,
+        correlation_id="cid-1",
+        otel={},
+        enqueued_at=datetime.now(UTC),
+        payload=ExtractEntitiesPayload(doc_id="doc-1", chunk_ids=[chunk.chunk_id]),
+    )
+
+
+async def test_cancelled_task_marks_the_document_failed_with_job_timeout(
+    container: Container,
+) -> None:
+    """A job cancelled by arq's `job_timeout` must not strand its document.
+
+    `asyncio.CancelledError` inherits `BaseException`, so `run_task`'s `except Exception` never
+    saw it: no failure handler ran, the row stayed at EXTRACTING forever, and nothing in the
+    system detects or re-drives that state. `asyncio.wait_for` here is exactly how arq cancels a
+    job (`arq/worker.py`'s `run_job`), so this reproduces the real mechanism rather than calling
+    `task.cancel()` by hand.
+    """
+    env = await _prepare_extract(container)
+    container.llm_client = _HangingLLM()
+    ctx = {"container": container, "job_id": "job-1", "job_try": 1}
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(extract_entities(ctx, env), timeout=0.05)
+
+    record = await container.ledger.get("doc-1")
+    assert record is not None
+    assert record.status == DocumentStatus.FAILED
+    # Distinguishable from an ordinary crash, so a timeout is diagnosable from the ledger alone.
+    assert record.error_code == "JOB_TIMEOUT"
+
+
+async def test_cancellation_is_reraised_not_swallowed(container: Container) -> None:
+    """Recording FAILED must not absorb the cancellation. Swallowing a `CancelledError` breaks
+    the contract the event loop relies on and can wedge the worker, so the handler re-raises."""
+    env = await _prepare_extract(container)
+    container.llm_client = _HangingLLM()
+    ctx = {"container": container, "job_id": "job-1", "job_try": 1}
+
+    task = asyncio.create_task(extract_entities(ctx, env))
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert task.cancelled()
+
+
+async def test_rate_limited_becomes_an_arq_retry_honouring_retry_after(
+    container: Container,
+) -> None:
+    """arq retries `Retry` and almost nothing else, so a 429 had to become one.
+
+    Before this, a plain `RateLimited` was a permanent failure on its first attempt — `max_tries`
+    was dead configuration for the failure most likely on a free tier, and one 429 surviving the
+    gateway's fallback chain ended a document for good.
+    """
+    env = await _prepare_extract(container)
+    container.llm_client = _RaisingLLM(RateLimited("429 from gateway", retry_after=7.0))
+    ctx = {"container": container, "job_id": "job-1", "job_try": 1}
+
+    with pytest.raises(Retry) as exc_info:
+        await extract_entities(ctx, env)
+
+    # defer_score is milliseconds; the provider's own Retry-After wins over any guess we'd make.
+    assert exc_info.value.defer_score == 7000
+    # A retry is not a failure: the document must stay in flight, not be marked FAILED.
+    record = await container.ledger.get("doc-1")
+    assert record is not None
+    assert record.status == DocumentStatus.EXTRACTING
+
+
+async def test_rate_limited_without_retry_after_uses_configured_backoff(
+    container: Container,
+) -> None:
+    """`llm.adaptive_rate_limit.backoff_on_429_s` / `max_backoff_s` were declared in config and
+    read by nothing. This is what makes them live."""
+    env = await _prepare_extract(container)
+    container.llm_client = _RaisingLLM(RateLimited("429, no header", retry_after=None))
+    spec = container.settings.llm.adaptive_rate_limit
+    ctx = {"container": container, "job_id": "job-1", "job_try": 2}
+
+    with pytest.raises(Retry) as exc_info:
+        await extract_entities(ctx, env)
+
+    # Exponential from the configured base: attempt 2 -> base * 2**1, clamped to max_backoff_s.
+    expected = min(spec.backoff_on_429_s * 2, spec.max_backoff_s)
+    assert exc_info.value.defer_score == expected * 1000
+    assert exc_info.value.defer_score > 0
+
+
+async def test_rate_limited_on_the_final_attempt_fails_instead_of_retrying(
+    container: Container,
+) -> None:
+    """On the last attempt a `Retry` would be worse than useless.
+
+    arq re-queues it, then refuses to run try `max_tries + 1` and fails the job internally with
+    `max retries exceeded` — a path that never calls the task's `on_failure`. The document would
+    be stranded at EXTRACTING exactly as before. So the last attempt fails loudly instead.
+    """
+    env = await _prepare_extract(container)
+    container.llm_client = _RaisingLLM(RateLimited("429 again", retry_after=5.0))
+    max_tries = container.settings.ingestion.dead_letter.max_attempts
+    ctx = {"container": container, "job_id": "job-1", "job_try": max_tries}
+
+    with pytest.raises(RateLimited):
+        await extract_entities(ctx, env)
+
+    record = await container.ledger.get("doc-1")
+    assert record is not None
+    assert record.status == DocumentStatus.FAILED
+    assert record.error_code == "RATE_LIMITED"
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected_code"),
+    [
+        (LLMSchemaViolation("bad json after repairs"), "LLM_SCHEMA_VIOLATION"),
+        (ValidationError("payload rejected"), "VALIDATION_ERROR"),
+    ],
+)
+async def test_deterministic_failures_are_not_retried(
+    container: Container, exc: Exception, expected_code: str
+) -> None:
+    """Retrying these spends extraction quota to fail identically: the same prompt and schema
+    produce the same rejection, and `LiteLLMClient.structured` has already burned `max_repairs`
+    attempts before raising. They must fail the document on the first attempt."""
+    env = await _prepare_extract(container)
+    container.llm_client = _RaisingLLM(exc)
+    ctx = {"container": container, "job_id": "job-1", "job_try": 1}
+
+    with pytest.raises(type(exc)):
+        await extract_entities(ctx, env)
+
+    record = await container.ledger.get("doc-1")
+    assert record is not None
+    assert record.status == DocumentStatus.FAILED
+    assert record.error_code == expected_code

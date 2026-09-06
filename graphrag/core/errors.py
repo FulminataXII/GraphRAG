@@ -98,6 +98,25 @@ class ConflictError(AppError):
     retryable: ClassVar[bool] = False
 
 
+class JobTimeout(AppError):
+    """A background job was cancelled by arq's `job_timeout` before it finished.
+
+    Never raised by a service — `apps/worker/tasks/_common.py` constructs it when it catches
+    `asyncio.CancelledError`, purely so the ledger records a status distinguishable from an
+    ordinary crash. Without it, a timed-out job leaves its document stranded at whatever
+    in-progress status it held (EXTRACTING/RESOLVING) with nothing in the system able to detect
+    or re-drive it: `CancelledError` inherits `BaseException`, so the task wrapper's
+    `except Exception` never saw it and no failure handler ran.
+
+    `retryable` is True because the work genuinely may succeed on a re-run (`graphrag ingest
+    --force <path>`), not because anything retries it automatically — nothing does.
+    """
+
+    code: ClassVar[str] = "JOB_TIMEOUT"
+    http_status: ClassVar[int] = 504
+    retryable: ClassVar[bool] = True
+
+
 class InternalError(AppError):
     code: ClassVar[str] = "INTERNAL_ERROR"
     http_status: ClassVar[int] = 500
