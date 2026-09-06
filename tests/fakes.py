@@ -10,8 +10,12 @@ from __future__ import annotations
 import hashlib
 from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime, timedelta
+from functools import cache
+from pathlib import Path
 from typing import Any
 from uuid import UUID
+
+import yaml
 
 from graphrag.core.errors import (
     GraphBackendUnavailable,
@@ -260,12 +264,31 @@ class FakeGraphStore:
         return not self.fail
 
 
+@cache
+def configured_llm_roles() -> frozenset[str]:
+    """The role names `llm.roles` defines, read from `config/base.yaml`.
+
+    Derived rather than hardcoded: a role added or renamed in config must not need a matching
+    edit here, or this guard becomes the next thing to drift silently. base.yaml is
+    authoritative — neither `local.yaml` nor `test.yaml` overrides `llm.roles`.
+
+    Read as YAML rather than through `Settings()`: this needs no secrets and no APP_ENV, and it
+    resolves relative to this file rather than the cwd, because the autouse unit fixture chdirs
+    every test into an empty tmp_path.
+    """
+    path = Path(__file__).resolve().parents[1] / "graphrag" / "config" / "base.yaml"
+    return frozenset(yaml.safe_load(path.read_text(encoding="utf-8"))["llm"]["roles"])
+
+
 class FakeLLMClient:
     """Scripted responses queue; can emit invalid JSON N times.
 
     `script_structured(role, *items)` queues return values for a role. An item that is an
     `Exception` instance simulates a repair-triggering failure (e.g. a schema violation) —
     the next queued item is then returned/raised as the "repaired" attempt.
+
+    Queues are keyed by the LLM ROLE a node passes to `structured(role=...)`, never by the
+    node's own name — see `script_structured`, which refuses anything else.
     """
 
     def __init__(self) -> None:
@@ -274,6 +297,23 @@ class FakeLLMClient:
         self.fail = False
 
     def script_structured(self, role: str, *responses: Any) -> None:
+        """Queue responses for `role`, rejecting a role no config defines.
+
+        The guard exists because the failure it catches is invisible. A queue scripted under a
+        NODE name ("plan_route", "generate") is never consumed by anything: the node asks for
+        its role ("router", "synth"), finds no queue, raises `LLMProviderExhausted`, and — since
+        most of this pipeline fails open — the test goes green having exercised nothing. That is
+        exactly how `test_each_node_is_pure` scripted five node names and asserted nothing for
+        several build orders.
+        """
+        valid = configured_llm_roles()
+        if role not in valid:
+            raise ValueError(
+                f"unknown LLM role {role!r}; llm.roles defines {sorted(valid)}. "
+                "Queues are keyed by the role a node passes to `structured(role=...)`, not by "
+                "the node's own name — a queue under a node name is never consumed, the node "
+                "fails open, and the test passes without exercising anything."
+            )
         self._queues.setdefault(role, []).extend(responses)
 
     async def structured[T](
