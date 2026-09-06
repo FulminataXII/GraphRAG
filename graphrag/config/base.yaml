@@ -47,6 +47,28 @@ ingestion:
   chunk_size: 900
   chunk_overlap: 150
   min_chunk_chars: 80
+  # Ceiling on ONE background job. arq's default is 300s and was never set explicitly, which
+  # silently bounded `extract_entities` -- a job that makes ceil(chunks / bulk_chunks_per_request)
+  # SEQUENTIAL `bulk` calls, so its duration scales with the biggest document, not with a
+  # constant. Derived, not chosen:
+  #
+  #   max chunks in one document        125   (corpus/11_Apple_Inc..txt, re-derived by the
+  #                                            real chunker at chunk_size 900 / overlap 150)
+  #   / llm.batching.bulk_chunks_per_request 20
+  #   = ceil(6.25)                        7   sequential bulk calls in one job
+  #   x llm.roles.bulk.timeout_s        240   worst case per call
+  #   = 1680s worst case, + 120s for the job's non-LLM work (Qdrant get_chunks over 125 ids,
+  #     two ledger round trips, one enqueue)
+  #   = 1800
+  #
+  # Measured reality is far below the ceiling: one real 20-chunk bulk call took 29.5s, so doc 11
+  # typically finishes in ~210s. The gap is deliberate -- the ceiling must cover the worst case
+  # or a cancelled job silently strands a document, which is the failure this value exists to
+  # prevent. It is NOT free: a genuinely wedged job now holds one of
+  # `parallelism.max_concurrent_docs` slots for 30 minutes. Making the batch calls concurrent
+  # instead of sequential would collapse both numbers and is the real fix; it is a larger change
+  # than setting a timeout and is deliberately not attempted here.
+  job_timeout_s: 1800
   normalizer:
     unicode_form: NFKC
     casefold_for_hash: true
@@ -174,7 +196,16 @@ llm:
     grader: { model: fast-low-latency, temperature: 0.0, max_tokens: 1200, timeout_s: 60 }
     # 32000 output tokens in one batched extraction call — this role is why the global ceiling
     # is 300 in the first place.
-    bulk: { model: bulk-high-tpm, temperature: 0.1, max_tokens: 32000, timeout_s: 300 }
+    # timeout_s 240, not the 300 this used to be. 300 was the same value as arq's (then implicit)
+    # 300s job_timeout, so ONE hung call could consume an entire `extract_entities` job that
+    # legitimately needs seven of them. It is now a per-call ceiling strictly under
+    # ingestion.job_timeout_s / 7 (= 257s), which is what keeps a single stuck call from
+    # cancelling the whole job. Sized the same way `synth` is: litellm/config.yaml gives
+    # bulk-high-tpm a per-deployment `timeout: 60`, so 3 attempts (1 + num_retries: 2) spend at
+    # most 180s upstream, leaving 60s inside the 240 for the cross-provider fallback to
+    # fast-low-latency to actually run. Measured: one real 20-chunk batch returns in 29.5s, so
+    # 60s per attempt is 2x headroom and 240s overall is 8x.
+    bulk: { model: bulk-high-tpm, temperature: 0.1, max_tokens: 32000, timeout_s: 240 }
     # 2000, not the 1200 this used to be. `synth-quality` runs at `reasoning_effort: medium`
     # (litellm/config.yaml) and reasoning tokens are spent against the SAME ceiling as the
     # answer: measured through the gateway on a real `generate` call, completion tokens land at

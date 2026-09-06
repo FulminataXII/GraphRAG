@@ -30,6 +30,13 @@ model_list:
       model: gemini/gemini-3.5-flash-lite
       api_key: os.environ/GEMINI_API_KEY_1
       reasoning_effort: low
+      # Per-DEPLOYMENT ceiling on one upstream attempt — the same gap that `synth-quality`
+      # already documents below, which this role had too. Without it a hung provider burns the
+      # whole app-side budget (base.yaml llm.roles.bulk.timeout_s) on attempt 1 and the
+      # cross-provider fallback to fast-low-latency never runs. 3 attempts x 60s = 180s
+      # upstream, leaving 60s inside the 240s app ceiling for that fallback. 60s is 2x the
+      # 29.5s a real 20-chunk extraction batch was measured at, so it does not cut good calls.
+      timeout: 60
       rpm: 15
       tpm: 1000000
 

@@ -52,6 +52,12 @@ ingestion:
   chunk_size: 900               # characters, not tokens — deterministic and debuggable
   chunk_overlap: 150            # validated: must be < chunk_size
   min_chunk_chars: 80           # discard fragments below this
+  # Ceiling on ONE background job, passed to arq as `job_timeout` (its own default is 300s).
+  # `extract_entities` makes ceil(chunks / llm.batching.bulk_chunks_per_request) SEQUENTIAL bulk
+  # calls in a single job, so job duration scales with the largest document in your corpus, not
+  # with a constant. Size it as that count x llm.roles.bulk.timeout_s, plus margin, or arq
+  # cancels the job mid-extraction and strands the document.
+  job_timeout_s: 1800
   normalizer:
     unicode_form: NFKC
     casefold_for_hash: true     # hash the normalized form, store the original
@@ -195,7 +201,7 @@ llm:
   roles:
     router:  { model: fast-low-latency, temperature: 0.0, max_tokens: 400,  timeout_s: 60  }
     grader:  { model: fast-low-latency, temperature: 0.0, max_tokens: 1200,  timeout_s: 60  }
-    bulk:    { model: bulk-high-tpm,    temperature: 0.1, max_tokens: 32000, timeout_s: 300 }
+    bulk:    { model: bulk-high-tpm,    temperature: 0.1, max_tokens: 32000, timeout_s: 240 }
     synth:   { model: synth-quality,    temperature: 0.2, max_tokens: 2000, timeout_s: 120 }
     judge:   { model: judge-alt-vendor, temperature: 0.0, max_tokens: 500,  timeout_s: 60  }
     # validated at startup: judge provider MUST differ from synth provider

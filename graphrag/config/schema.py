@@ -89,6 +89,13 @@ class IngestionSection(_Section):
     chunk_size: int
     chunk_overlap: int
     min_chunk_chars: int
+    # Ceiling on ONE background job, in seconds -- `apps/worker/settings.py` passes it to arq as
+    # `job_timeout`. arq's own default is 300s, which is not a safe implicit value here:
+    # `extract_entities` makes ceil(chunks / llm.batching.bulk_chunks_per_request) SEQUENTIAL
+    # `bulk` calls in a single job, so the job's duration scales with the largest document in
+    # the corpus while the default does not. Must exceed that product by a margin, or arq
+    # cancels the job mid-extraction. See base.yaml for the arithmetic behind the value.
+    job_timeout_s: int
     normalizer: NormalizerSpec
     parallelism: ParallelismSpec
     payload_projection: ProjectionSpec
