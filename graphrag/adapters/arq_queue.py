@@ -13,8 +13,14 @@ from opentelemetry.context import Context
 from opentelemetry.propagate import extract
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
+from graphrag.core.errors import ConflictError
 from graphrag.core.events import JobEnvelope
 from graphrag.core.models import JobStatus
+
+#: arq's own Redis key prefixes for one job, in `arq.constants`. Duplicated here rather than
+#: imported so this module keeps its single narrow dependency on arq (`arq.jobs`, imported
+#: lazily in `status`); `drop_job` asserts nothing about them beyond what arq documents.
+_JOB_KEY_PREFIXES: tuple[str, ...] = ("arq:job:", "arq:result:", "arq:retry:")
 
 
 class _ArqRedisLike(Protocol):
@@ -34,6 +40,8 @@ class _ArqRedisLike(Protocol):
         **kwargs: Any,
     ) -> Any: ...
 
+    async def delete(self, *keys: str) -> Any: ...
+
 
 def restore_context(envelope: JobEnvelope[Any]) -> Context:
     """Extract the parent OTel context from envelope.otel. Used by every task wrapper."""
@@ -51,6 +59,9 @@ class ArqJobQueue:
         - job_id is the caller's idempotency key; arq's dedup on it is an optimisation, never
           the correctness mechanism (that's content-addressed IDs / MERGE / ON CONFLICT).
         - queue_name routes to the projection queue when specified.
+        - enqueue() raises ConflictError when arq declined to queue the job because that job_id
+          is already taken. The return type stays `str`: there is no "enqueued nothing"
+          success value to hand back, so every returned id names a job that really exists.
     """
 
     def __init__(self, pool: _ArqRedisLike) -> None:
@@ -74,11 +85,36 @@ class ArqJobQueue:
             _job_id=job_id,
             _queue_name=queue_name,
         )
-        # arq returns None when _job_id collides with a still-queued/retained job — the
-        # idempotency key is doing exactly its job, so surface it rather than raising.
-        resolved_id = job.job_id if job is not None else job_id
-        assert resolved_id is not None
+        # arq returns None when `arq:job:<id>` OR `arq:result:<id>` already exists, and it does
+        # NOT enqueue anything in that case. This used to return `job_id` anyway, which reported
+        # success for work that was never queued: `graphrag ingest` printed "enqueued ..." and
+        # `DELETE /v1/documents/{id}` returned 202 for a deletion that never ran. The retained
+        # RESULT key is the surprising half — arq keeps it for `keep_result` (3600s by default),
+        # so for a full hour after a job finishes, re-enqueueing that same job_id silently does
+        # nothing. The caller asked for work and got none; that is a failed request, not an
+        # outcome to branch on.
+        if job is None:
+            raise ConflictError(
+                f"job {job_id!r} was not enqueued: arq already holds a job or a retained "
+                f"result under that id. arq keeps a finished job's result for its "
+                f"`keep_result` window (3600s by default), so a re-run within the hour is "
+                f"dropped silently. Clear it with `graphrag ingest --force <path>`, which "
+                f"removes the retained keys and the ledger row before re-enqueueing.",
+                details={"job_id": job_id, "task": task, "queue_name": queue_name},
+            )
+        resolved_id: str = job.job_id
         return resolved_id
+
+    async def drop_job(self, job_id: str) -> None:
+        """Delete arq's per-job keys so `job_id` can be enqueued again immediately.
+
+        Deliberately NOT on the `core.ports.JobQueue` Protocol (BLUEPRINT §3.5): this is a
+        recovery escape hatch for `graphrag ingest --force`, not part of the queue contract that
+        services program against. Nothing in the normal ingest path may call it — clearing a
+        live job's keys mid-flight would let a second copy of that job start alongside the
+        first.
+        """
+        await self._pool.delete(*(prefix + job_id for prefix in _JOB_KEY_PREFIXES))
 
     async def status(self, job_id: str) -> JobStatus:
         from arq.jobs import Job as ArqJob
