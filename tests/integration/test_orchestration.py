@@ -189,6 +189,7 @@ async def hybrid_container(clean_neo4j, _pg_database: str):
     # Chunk ids are content-addressed, so the grader's and synth's scripted responses can name
     # the exact chunks this test is about before anything is written anywhere.
     graph_chunk_ids = [compute_chunk_id(text) for text in _GRAPH_ONLY_TEXTS]
+    vector_chunk_id = compute_chunk_id(_VECTOR_ONLY_TEXT)
 
     fake_llm = FakeLLMClient()
     # strategy="vector" on purpose: the run passes strategy="hybrid", so a plan that comes back
@@ -211,6 +212,14 @@ async def hybrid_container(clean_neo4j, _pg_database: str):
             for _ in range(4)
         ),
     )
+    # A grade for EVERY fused chunk, including the vector-only one. `grade_context` treats a
+    # grade count that does not match the chunk count as a failure -- it keeps the whole batch
+    # and marks the run degraded -- because a truncated grader response is otherwise
+    # indistinguishable from one that deliberately judged a chunk irrelevant. Grading only the
+    # two graph chunks (which this fixture used to do) is therefore a degraded run under those
+    # semantics, not a normal one, and `test_hybrid_override_returns_real_graph_content` asserts
+    # on a clean `degraded`. The cafeteria text really is irrelevant to "who chairs Acme
+    # Robotics?", so saying so explicitly is also the more honest script.
     fake_llm.script_structured(
         "grader",
         *(
@@ -218,6 +227,13 @@ async def hybrid_container(clean_neo4j, _pg_database: str):
                 grades=[
                     RelevanceGrade(chunk_id=str(cid), relevant=True, reason="graph evidence")
                     for cid in graph_chunk_ids
+                ]
+                + [
+                    RelevanceGrade(
+                        chunk_id=str(vector_chunk_id),
+                        relevant=False,
+                        reason="cafeteria hours, not board membership",
+                    )
                 ]
             )
             for _ in range(8)

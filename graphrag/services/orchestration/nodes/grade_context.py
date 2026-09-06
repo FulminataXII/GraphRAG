@@ -17,6 +17,10 @@ from graphrag.services.orchestration.state import QueryState
 #: make a two-batch query read as twice as broken as a one-batch one.
 DEGRADED = "grader"
 
+#: A response that parsed but carried fewer grades than the batch had chunks. Distinct from
+#: `LLM_SCHEMA_VIOLATION` because nothing raised — see `grade_batch`.
+INCOMPLETE_CODE = "GRADER_INCOMPLETE"
+
 
 async def grade_batch(
     chunks: list[ScoredChunk], state: QueryState, deps: NodeDeps
@@ -46,13 +50,37 @@ async def grade_batch(
             tokens=result.prompt_tokens + result.completion_tokens,
             wall_ms=result.latency_ms,
         )
-        # A chunk the grader did not mention is still dropped, unchanged from before. A
-        # truncated-but-parseable response therefore loses chunks silently — `grader.max_tokens`
-        # bounds the whole completion and this is a reasoning model, so a batch really can come
-        # back as valid JSON carrying grades for only the first few chunks (measured: at
-        # max_tokens 600, finish_reason=length with 2 grades for 8 chunks). Reported rather than
-        # handled here: deciding whether an omitted grade means "irrelevant" or "not graded"
-        # changes what `grade_context` returns and is a BLUEPRINT §6.4 semantics call.
+        # A grade count that does not match the chunk count is a FAILURE, not a partial success.
+        # `grader.max_tokens` bounds the whole completion and this is a reasoning model, so a
+        # batch can come back as syntactically valid JSON carrying grades for only the first few
+        # chunks (measured at max_tokens 600: finish_reason=length, 2 grades for 8 chunks).
+        # Nothing raises, so the fail-open path below never runs, and every unmentioned chunk is
+        # dropped as "not relevant" purely because the model ran out of room to mention it.
+        #
+        # The asymmetry decides which way to fail. An extra irrelevant chunk is recoverable
+        # downstream — `verify_grounded` and the citation checks both operate on what `generate`
+        # actually used. A silently dropped chunk is recoverable by nothing: it is simply absent,
+        # and the answer is worse with no signal that it happened. So the whole batch survives.
+        graded_ids = {g.chunk_id for g in result.value.grades}
+        ungraded = [c for c in chunks if str(c.chunk.chunk_id) not in graded_ids]
+        if ungraded:
+            deps.metrics.grader_degraded.add(1)
+            return (
+                list(chunks),
+                spent,
+                NodeFailure(
+                    node="grade_context",
+                    code=INCOMPLETE_CODE,
+                    message=(
+                        f"Grader returned {len(result.value.grades)} grade(s) for a batch of "
+                        f"{len(chunks)} chunk(s); the whole batch was kept ungraded rather than "
+                        f"dropping the {len(ungraded)} it never mentioned"
+                    ),
+                    attempt=attempt,
+                    at=deps.clock.now(),
+                ),
+            )
+
         relevant_ids = {g.chunk_id for g in result.value.grades if g.relevant}
         relevant_chunks = [c for c in chunks if str(c.chunk.chunk_id) in relevant_ids]
         return relevant_chunks, spent, None

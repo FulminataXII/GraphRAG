@@ -192,3 +192,102 @@ async def test_grader_degraded_is_recorded_once_across_batches(container: Any):
 
     assert update["degraded"] == ["grader"]
     assert len(update["failures"]) == 2  # one per batch, so the count is still legible
+
+
+async def test_grader_partial_response_is_a_failure_not_a_partial_success(container: Any):
+    """A grade count that doesn't match the chunk count is a FAILURE, not a partial success.
+
+    `grader.max_tokens` bounds the whole completion and `fast-low-latency` is a reasoning model,
+    so a batch can come back as syntactically valid JSON carrying grades for only the first few
+    chunks (measured at max_tokens 600: finish_reason=length, 2 grades for 8 chunks). Nothing
+    raises, so the fail-open path never runs, and the unmentioned chunks are dropped as "not
+    relevant" purely because the model ran out of room to mention them.
+
+    The asymmetry decides which way to fail: an extra irrelevant chunk is recoverable downstream
+    -- `verify_grounded` and the citation checks both operate on what `generate` actually used --
+    while a silently dropped chunk is recoverable by nothing. It is simply absent, and the answer
+    is worse with no signal that it happened. So the whole batch survives and the run is marked
+    degraded.
+    """
+    from graphrag.core.models import ScoredChunk
+    from graphrag.services.orchestration.schemas import RelevanceGrade, RelevanceGradeBatch
+    from tests.factories import make_chunk
+
+    deps = container.orchestrator.deps
+    fused = [
+        ScoredChunk(chunk=make_chunk(f"chunk {i}"), score=1.0 - i / 10, rank=i, origin="vector")
+        for i in range(1, 4)
+    ]
+    # Grades for the first chunk only: the other two are never mentioned.
+    container.llm_client.script_structured(
+        "grader",
+        RelevanceGradeBatch(
+            grades=[
+                RelevanceGrade(
+                    chunk_id=str(fused[0].chunk.chunk_id), relevant=True, reason="on topic"
+                )
+            ]
+        ),
+    )
+
+    state = {
+        "correlation_id": "cid",
+        "question": "what?",
+        "active_query": "what?",
+        "fused": fused,
+        "graded": [],
+        "degraded": [],
+        "failures": [],
+        "attempts": {},
+    }
+
+    update = await grade_context.node(state, deps)
+
+    # Every chunk survives, including the two the grader never reached.
+    assert [c.chunk.chunk_id for c in update["graded"]] == [c.chunk.chunk_id for c in fused]
+    assert update["degraded"] == ["grader"]
+    assert len(update["failures"]) == 1
+    assert update["failures"][0].node == "grade_context"
+    assert update["failures"][0].code == "GRADER_INCOMPLETE"
+
+
+async def test_grader_full_response_is_not_degraded(container: Any):
+    """The counterpart: a grade per chunk is a normal run, however it grades them. Without this,
+    the count check above could be satisfied by marking every run degraded."""
+    from graphrag.core.models import ScoredChunk
+    from graphrag.services.orchestration.schemas import RelevanceGrade, RelevanceGradeBatch
+    from tests.factories import make_chunk
+
+    deps = container.orchestrator.deps
+    fused = [
+        ScoredChunk(chunk=make_chunk(f"chunk {i}"), score=1.0, rank=i, origin="vector")
+        for i in range(1, 4)
+    ]
+    container.llm_client.script_structured(
+        "grader",
+        RelevanceGradeBatch(
+            grades=[
+                RelevanceGrade(chunk_id=str(c.chunk.chunk_id), relevant=(i == 0), reason="graded")
+                for i, c in enumerate(fused)
+            ]
+        ),
+    )
+
+    state = {
+        "correlation_id": "cid",
+        "question": "what?",
+        "active_query": "what?",
+        "fused": fused,
+        "graded": [],
+        "degraded": [],
+        "failures": [],
+        "attempts": {},
+    }
+
+    update = await grade_context.node(state, deps)
+
+    # Graded, and the irrelevant ones really are dropped -- the count check must not turn the
+    # grader into a pass-through.
+    assert [c.chunk.chunk_id for c in update["graded"]] == [fused[0].chunk.chunk_id]
+    assert "degraded" not in update
+    assert "failures" not in update
