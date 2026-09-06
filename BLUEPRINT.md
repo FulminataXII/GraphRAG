@@ -2022,15 +2022,34 @@ class WorkerSettings:
     """arq worker configuration.
 
     Contract:
-        - functions = [ingest_document, extract_entities, resolve_entities, project_payload,
-          delete_document]
+        - functions = [func("<dotted path>", name=TASK_NAME) for each of ingest_document,
+          extract_entities, resolve_entities, project_chunk_payload, delete_document]
+          ⚠️ The `name=` is mandatory — see §7.2's registration warning. Names come from
+          core/events.py; no string literal at any enqueue site.
           ⚠️ Every task file in this directory must appear here. A task that exists but is not
           registered is enqueued and never runs — arq drops the job with no error the caller
-          sees. project_payload was omitted from this list through BO-05/06; verify it is
-          actually registered in code, not just listed here.
+          sees. (project_chunk_payload is registered on ProjectionWorkerSettings, a separate
+          single-concurrency worker — that split removes the Qdrant sources[] read-modify-write
+          race and must not be merged into this list.)
         - on_startup builds the Container and stores it on ctx; on_shutdown closes it.
         - max_jobs = ingestion.parallelism.max_concurrent_docs
+        - job_timeout = ingestion.job_timeout_s. MUST be set explicitly; arq defaults to 300s,
+          which is shorter than one extract_entities job for a large document. Derive it as
+          ceil(max_chunks_per_doc / llm.batching.bulk_chunks_per_request) x llm.roles.bulk.timeout_s
+          plus margin for non-LLM work — currently 7 x 240 + 120 = 1800.
+          ⚠️ A cancellation on this timeout MUST write FAILED. asyncio.CancelledError inherits
+          BaseException, so `except Exception` cannot see it; it needs its own clause, an
+          asyncio.shield()ed ledger write, and an immediate re-raise. Without that the document
+          sits at EXTRACTING forever and nothing detects it.
         - retry_jobs=True, max_tries from ingestion.dead_letter.max_attempts
+          ⚠️ arq retries ONLY on arq.worker.Retry, CancelledError or RetryJob — a plain exception
+          gets zero retries, so max_tries is dead config unless something raises Retry. The task
+          wrapper converts RateLimited into Retry(defer=Retry-After, else
+          llm.adaptive_rate_limit.backoff_on_429_s x 2^(job_try-1) capped at max_backoff_s).
+          Deterministic failures (LLMSchemaViolation, ValidationError) are NOT retried — structured()
+          has already spent its repairs on them. On the FINAL attempt RateLimited must fail
+          terminally rather than raising Retry: arq refuses try max_tries+1 internally without
+          calling on_failure, which stranded the ledger row this contract exists to protect.
         - **health_check_interval MUST be set explicitly** (10s). arq defaults it to 3600s, so
           the Redis health sentinel the worker writes does not exist for up to an hour after
           startup. A compose healthcheck polling every 15s then never sees it and the container
@@ -2064,10 +2083,31 @@ class ProjectionWorkerSettings:
 > chain isn't kept lazy (`Container`, ML/DB-driver imports, task modules), the check itself
 > reliably takes over 10s cold — measured directly at 10.8s/11.7s/13.7s/13.5s across four
 > back-to-back runs, every one a legitimate pass (exit 0) that the old `10s` timeout would still
-> kill. Two independent things fix this: keep `WorkerSettings`'s import chain lazy (register tasks
-> as import-string paths, defer `Container` construction into `on_startup`), AND set `timeout`
-> with real margin above whatever that costs — `20s` held clean after the lazy-import fix dropped
-> cold-import time to under 1s, don't assume that's true before verifying it on your own build.
+> kill. Two independent things fix this: defer `Container` construction into `on_startup`, AND set
+> `timeout` with real margin above whatever that costs. Re-measured after the task-name fix below:
+> `arq --check` runs 4.8–5.9s across five cold runs, all exit 0, so `20s` still holds — but verify
+> on your own build rather than assuming.
+>
+> ⚠️ **Registering tasks as bare import-string paths was ALSO specified here and it was wrong.**
+> arq registers a string-registered function under **the string itself**, not its last segment
+> (`arq/worker.py:83`, `name = name or coroutine`). So `functions = ["…tasks.ingest.ingest_document"]`
+> registers that whole dotted path while every caller enqueues `"ingest_document"` — the
+> intersection is empty and **every job fails with `function not found`**, silently, with the
+> ledger stranded at `PENDING` because `job_failed()` never reaches the task wrapper. This shipped
+> in BO-10 and nothing ran through the worker until it was caught at the BO-10 audit.
+>
+> The fix is `func(path, name=<bare name>)`, which registers correctly. Note it does NOT preserve
+> laziness: `func()` calls `import_string` inside itself, so in a class body the task graph is
+> imported at `settings.py` import time — measured 959ms → 1527ms, i.e. +568ms against a 20s
+> budget. That trade is correct and deliberate: `arq --check` never builds a `Worker` at all, so
+> the laziness this clause was protecting bought nothing on the path it was written for.
+>
+> **Task names live in exactly one place** (`core/events.py`, beside the payload each carries —
+> `core/` being the only layer `services/`, `adapters/` and `apps/` may all import). No string
+> literal at any enqueue site. Guarded three ways: a test that builds a real `arq.worker.Worker`
+> and reads `worker.functions` (performing no truncation of its own), a test asserting registered
+> names cover every name callers enqueue, and an AST scan failing on any string literal in a
+> first-position `enqueue(...)`/`run_task(...)` argument.
 > **`health_check_interval` must be shorter than the compose `interval`** (10s < 15s). Invert
 > them and the sentinel expires between probes, so the container flaps between healthy and
 > unhealthy for no reason.
