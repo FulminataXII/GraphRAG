@@ -3,20 +3,40 @@
 `apps/worker/settings.py` reads `get_settings()` at import (class-body) time, so this module
 must set up config/secrets BEFORE importing it — same as `tests.conftest`'s `settings` fixture
 does for everything else.
+
+These tests assert against the names arq ACTUALLY registers, obtained by building a real
+`arq.worker.Worker` from each settings class. That is the whole point of this file, and the
+previous version of it did not do that: it read the last dotted segment of each import-string
+path and compared THAT to the enqueue names. arq does no such truncation — `func()` registers a
+string-registered function under the entire string — so the assertion compared a value the test
+computed against a value the test also computed, and passed while every job in the system failed
+with `function 'ingest_document' not found`. A test that cannot observe the bug it is named
+after is worse than no test: it is a standing claim that the bug cannot happen.
+
+`create_worker` does not connect to Redis (`Worker.__init__` only builds `RedisSettings`; the
+connection is made in `main()`), so calling it here is cheap and offline.
 """
 
 from __future__ import annotations
 
+import ast
 import importlib
 import inspect
 from pathlib import Path
 
 import pytest
+from arq.worker import create_worker
 
+from graphrag.core.events import TASK_NAMES
 from tests.unit._settings_helpers import REQUIRED_SECRET_ENV
 
 _TASKS_PACKAGE = "graphrag.apps.worker.tasks"
 _NON_TASK_MODULES = {"__init__", "_common"}
+_PACKAGE_ROOT = Path(__file__).resolve().parents[2] / "graphrag"
+
+#: Call targets whose FIRST positional argument is a task name. Each must be given one of the
+#: `core.events` constants, never a literal — see `test_no_task_name_literals_at_call_sites`.
+_TASK_NAME_CALLEES = frozenset({"enqueue", "run_task"})
 
 
 def _arq_task_functions(module: object) -> list[str]:
@@ -40,60 +60,13 @@ def _arq_task_functions(module: object) -> list[str]:
     return names
 
 
-def _registered_paths(worker_settings_module: object) -> list[str]:
-    """Every arq-registered task path across BOTH worker settings classes.
+def _registered_names(settings_cls: object) -> set[str]:
+    """The task names arq really registers for `settings_cls`.
 
-    BLUEPRINT §7.2 requires these to be import-STRING paths, not function objects: "keep
-    `WorkerSettings`'s import chain lazy (register tasks as import-string paths, defer
-    `Container` construction into `on_startup`)". Registering objects instead forces eager
-    top-level imports of every task module, and `arq --check` re-imports this module in a fresh
-    subprocess on every healthcheck — which is what the 20s compose timeout is sized against.
-    Asserting the shape here is deliberate: an earlier version of this file read `fn.__name__`,
-    which only works on objects, and that is what pushed `settings.py` into violating §7.2.
+    Built by constructing arq's own `Worker`, so whatever normalisation arq applies to
+    `functions` is applied here too. Nothing in this helper interprets an import path.
     """
-    paths = [
-        *worker_settings_module.WorkerSettings.functions,  # type: ignore[attr-defined]
-        *worker_settings_module.ProjectionWorkerSettings.functions,  # type: ignore[attr-defined]
-    ]
-    for entry in paths:
-        assert isinstance(entry, str), (
-            f"{entry!r} is registered as an object, not an import-string path — BLUEPRINT §7.2 "
-            "requires import-string paths so this module's import chain stays lazy."
-        )
-    return paths
-
-
-def _task_name(path: str) -> str:
-    """The arq task name: the last dotted segment of an import-string path.
-
-    arq registers a string-path function under that final segment, which is the same short name
-    the API enqueues with (`job_queue.enqueue("ingest_document", ...)`).
-    """
-    return path.rsplit(".", 1)[-1]
-
-
-def _resolve(path: str) -> object:
-    """Import `path` and return the attribute it names, asserting it exists and is callable.
-
-    Strictly stronger than the `fn.__name__` check this replaced. A typo'd import string
-    registers nothing: arq drops every job for that task with no error the enqueuing caller
-    sees — precisely the silent-drop failure this guard exists to catch. Reading `__name__` off
-    a function object could never have caught a typo, because a typo'd string never became a
-    function object in the first place.
-    """
-    module_path, _, attr = path.rpartition(".")
-    assert module_path, f"{path!r} is not a dotted import path"
-    try:
-        module = importlib.import_module(module_path)
-    except ModuleNotFoundError as exc:
-        raise AssertionError(f"{path!r} names a module that does not exist: {exc}") from exc
-    resolved = getattr(module, attr, None)
-    assert resolved is not None, (
-        f"{path!r} resolves to no attribute on {module_path} — arq would register nothing and "
-        "silently drop every job enqueued under that name"
-    )
-    assert callable(resolved), f"{path!r} resolves to {resolved!r}, which is not callable"
-    return resolved
+    return set(create_worker(settings_cls).functions)  # type: ignore[arg-type]
 
 
 @pytest.fixture
@@ -117,25 +90,84 @@ def test_projection_worker_queue_name_from_config(worker_settings_module) -> Non
 
 
 def test_worker_settings_functions_registered(worker_settings_module) -> None:
-    """The main queue registers exactly its four tasks, by resolvable import-string path."""
-    paths = list(worker_settings_module.WorkerSettings.functions)
-    for entry in paths:
-        assert isinstance(entry, str), (
-            f"{entry!r} is registered as an object, not an import-string path (BLUEPRINT §7.2)"
-        )
-    assert {_task_name(path) for path in paths} == {
-        "ingest_document",
-        "extract_entities",
-        "resolve_entities",
-        "delete_document",
+    """The main queue registers exactly its four tasks, under the names callers enqueue with."""
+    from graphrag.core.events import (
+        DELETE_DOCUMENT,
+        EXTRACT_ENTITIES,
+        INGEST_DOCUMENT,
+        RESOLVE_ENTITIES,
+    )
+
+    assert _registered_names(worker_settings_module.WorkerSettings) == {
+        INGEST_DOCUMENT,
+        EXTRACT_ENTITIES,
+        RESOLVE_ENTITIES,
+        DELETE_DOCUMENT,
     }
-    for path in paths:
-        _resolve(path)
+
+
+def test_registered_names_cover_every_enqueueable_task_name(worker_settings_module) -> None:
+    """THE regression guard for `function '<name>' not found`.
+
+    `core.events.TASK_NAMES` is every name a caller may pass to `JobQueue.enqueue`. The two
+    worker settings classes must register exactly that set between them. A name a caller can
+    enqueue but no worker registers is not a loud failure: arq accepts the job, drops it with
+    only a worker-side log line, and never runs the task's failure handler — so the document
+    sits at PENDING and the enqueuing caller is told nothing.
+    """
+    registered = _registered_names(worker_settings_module.WorkerSettings) | _registered_names(
+        worker_settings_module.ProjectionWorkerSettings
+    )
+    assert registered == set(TASK_NAMES), (
+        f"registered={sorted(registered)} but callers enqueue={sorted(TASK_NAMES)}; "
+        "every name in the difference is a job that would be silently dropped"
+    )
+
+
+def test_no_task_name_literals_at_call_sites() -> None:
+    """No `enqueue(...)`/`run_task(...)` call may name its task with a string literal.
+
+    This is what makes the drift structurally impossible rather than merely currently-absent:
+    the bug was two hand-written copies of one string, and a test that only compares today's
+    values would pass again the moment someone adds a sixth task with a fresh literal.
+    """
+    offenders: list[str] = []
+    for path in _PACKAGE_ROOT.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not node.args:
+                continue
+            callee = node.func
+            name = callee.attr if isinstance(callee, ast.Attribute) else None
+            if name is None and isinstance(callee, ast.Name):
+                name = callee.id
+            if name not in _TASK_NAME_CALLEES:
+                continue
+            first = node.args[0]
+            if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                rel = path.relative_to(_PACKAGE_ROOT.parent)
+                offenders.append(f"{rel}:{first.lineno}: {name}({first.value!r}, ...)")
+    assert not offenders, (
+        "task names must come from graphrag.core.events, not string literals:\n  "
+        + "\n  ".join(offenders)
+    )
 
 
 def test_worker_settings_max_tries_from_dead_letter_config(worker_settings_module) -> None:
     assert worker_settings_module.WorkerSettings.max_tries == 3
     assert worker_settings_module.WorkerSettings.retry_jobs is True
+
+
+def test_worker_settings_job_timeout_from_config(worker_settings_module) -> None:
+    """arq's own default is 300s, which silently bounded `extract_entities` — a job that makes
+    one sequential `bulk` call per batch of chunks, so its duration scales with the largest
+    document rather than with a constant. It must be set, and set from config."""
+    from graphrag.config.settings import get_settings
+
+    expected = get_settings().ingestion.job_timeout_s
+    assert worker_settings_module.WorkerSettings.job_timeout == expected
+    assert worker_settings_module.ProjectionWorkerSettings.job_timeout == expected
+    assert create_worker(worker_settings_module.WorkerSettings).job_timeout_s == expected
 
 
 def test_every_task_module_function_is_registered(worker_settings_module) -> None:
@@ -147,15 +179,11 @@ def test_every_task_module_function_is_registered(worker_settings_module) -> Non
     repository: `project_chunk_payload` has been correctly named and registered in
     `ProjectionWorkerSettings.functions` (its own dedicated single-concurrency queue/worker,
     `docker-compose.yml`'s `projection-worker` service) since the very first BO-05 commit
-    (`c370482`) — `git log -p` on `apps/worker/settings.py`/`tasks/project.py` shows no period
-    where the name or the registration were wrong. `test_worker_settings_functions_registered`
-    above is exactly the kind of test that would NOT have caught a real version of this bug
-    (a hardcoded set naming only the four functions it already knew about); this test is derived
-    from the `tasks/` directory instead, so a fifth task file added later — registered in
-    EITHER `WorkerSettings` or `ProjectionWorkerSettings` — can't repeat this silently.
+    (`c370482`).
 
-    Registrations are import-string paths (BLUEPRINT §7.2), so this compares the last dotted
-    segment and separately asserts each path resolves — see `_resolve`.
+    This scan is derived from the `tasks/` directory rather than from a hardcoded list, so a
+    fifth task file added later — registered in EITHER settings class — can't repeat this
+    silently. It compares against the names arq really registers.
     """
     tasks_dir = Path(importlib.import_module(_TASKS_PACKAGE).__file__).parent
     task_module_names = sorted(
@@ -163,13 +191,9 @@ def test_every_task_module_function_is_registered(worker_settings_module) -> Non
     )
     assert task_module_names, "expected at least one task module under apps/worker/tasks/"
 
-    registered_paths = _registered_paths(worker_settings_module)
-    registered = {_task_name(path) for path in registered_paths}
-
-    # Every registered path must actually resolve. A path that doesn't is worse than an
-    # unregistered task: it LOOKS registered.
-    for path in registered_paths:
-        _resolve(path)
+    registered = _registered_names(worker_settings_module.WorkerSettings) | _registered_names(
+        worker_settings_module.ProjectionWorkerSettings
+    )
 
     for module_name in task_module_names:
         module = importlib.import_module(f"{_TASKS_PACKAGE}.{module_name}")

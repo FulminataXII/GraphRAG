@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from graphrag.core.events import (
+    EXTRACT_ENTITIES,
+    PROJECT_CHUNK_PAYLOAD,
     ExtractEntitiesPayload,
     JobEnvelope,
     ProjectPayloadPayload,
@@ -212,7 +214,7 @@ class IngestionService:
         await self._source_registry.add(refs)
 
         await self._job_queue.enqueue(
-            "project_chunk_payload",
+            PROJECT_CHUNK_PAYLOAD,
             JobEnvelope(
                 correlation_id=correlation_id,
                 otel={},
@@ -222,7 +224,7 @@ class IngestionService:
             queue_name=self._ingestion.payload_projection.queue_name,
         )
         await self._job_queue.enqueue(
-            "extract_entities",
+            EXTRACT_ENTITIES,
             JobEnvelope(
                 correlation_id=correlation_id,
                 otel={},

@@ -33,7 +33,12 @@ from uuid import UUID
 
 from graphrag.apps.worker.tasks._common import run_task
 from graphrag.core.errors import AppError
-from graphrag.core.events import JobEnvelope, ResolveEntitiesPayload, UnresolvedRelation
+from graphrag.core.events import (
+    RESOLVE_ENTITIES,
+    JobEnvelope,
+    ResolveEntitiesPayload,
+    UnresolvedRelation,
+)
 from graphrag.core.models import DocumentStatus, Entity, Mention, Relation
 from graphrag.services.resolution.blocking import Blocker
 from graphrag.services.resolution.service import ResolutionService
@@ -141,7 +146,7 @@ async def resolve_entities(ctx: dict[str, Any], env: JobEnvelope[ResolveEntities
             await container.ledger.set_status(env.payload.doc_id, DocumentStatus.INDEXED)
             await container.ledger.bump_corpus_version()
 
-    await run_task("resolve_entities", ctx, env, _body, on_failure=_on_failure)
+    await run_task(RESOLVE_ENTITIES, ctx, env, _body, on_failure=_on_failure)
 
 
 __all__ = ["resolve_entities"]

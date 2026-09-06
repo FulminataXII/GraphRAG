@@ -1,4 +1,13 @@
-"""Versioned queue payload schemas. See BLUEPRINT §3.4."""
+"""Versioned queue payload schemas and the task names they travel under. See BLUEPRINT §3.4.
+
+The task names live here, beside the payload each one carries, because a name is half of the
+queue wire format: it is what arq stores in Redis and what it looks up in its own function
+registry. Previously the same string was written twice — once where the worker registered the
+function and once at every enqueue site — and the two silently desynchronised, so every job
+failed with `function '<name>' not found` while its ledger row stayed at PENDING. `core/` is the
+only layer `services/`, `adapters/` and `apps/` may all import (BLUEPRINT §0's layering table),
+so it is the only place one definition can be shared by the registration site and every caller.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +19,30 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 from graphrag.core.models import Mention
 
 SCHEMA_VERSION: Final[int] = 1
+
+# --- Task names --------------------------------------------------------------------------
+# The name a task is REGISTERED under by `apps/worker/settings.py` and ENQUEUED under by every
+# caller. Both sides import these; neither writes a string literal. Renaming a Python function
+# or moving its module cannot change these values, which is deliberate — the name is a wire
+# format that in-flight jobs already sitting in Redis are serialized against.
+INGEST_DOCUMENT: Final[str] = "ingest_document"
+EXTRACT_ENTITIES: Final[str] = "extract_entities"
+RESOLVE_ENTITIES: Final[str] = "resolve_entities"
+DELETE_DOCUMENT: Final[str] = "delete_document"
+PROJECT_CHUNK_PAYLOAD: Final[str] = "project_chunk_payload"
+
+#: Every name any caller may pass to `JobQueue.enqueue`. The two worker settings classes must
+#: register exactly this set across their two queues — `tests/unit/test_worker_settings.py`
+#: asserts it against the names arq ACTUALLY registers, not against the import paths.
+TASK_NAMES: Final[frozenset[str]] = frozenset(
+    {
+        INGEST_DOCUMENT,
+        EXTRACT_ENTITIES,
+        RESOLVE_ENTITIES,
+        DELETE_DOCUMENT,
+        PROJECT_CHUNK_PAYLOAD,
+    }
+)
 
 
 class JobEnvelope[P](BaseModel):

@@ -8,7 +8,7 @@ from typing import Any
 from graphrag.adapters.clock import SystemClock
 from graphrag.apps.worker.tasks._common import run_task
 from graphrag.core.errors import AppError
-from graphrag.core.events import IngestDocumentPayload, JobEnvelope
+from graphrag.core.events import INGEST_DOCUMENT, IngestDocumentPayload, JobEnvelope
 from graphrag.core.models import DocumentStatus
 from graphrag.services.ingestion.parser import DocumentParser
 from graphrag.services.ingestion.service import IngestionService
@@ -63,4 +63,4 @@ async def ingest_document(ctx: dict[str, Any], env: JobEnvelope[IngestDocumentPa
             correlation_id=env.correlation_id,
         )
 
-    await run_task("ingest_document", ctx, env, _body, on_failure=_on_failure)
+    await run_task(INGEST_DOCUMENT, ctx, env, _body, on_failure=_on_failure)

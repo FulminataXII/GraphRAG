@@ -7,7 +7,7 @@ from typing import Any
 
 from graphrag.apps.worker.tasks._common import run_task
 from graphrag.core.errors import AppError, ConflictError
-from graphrag.core.events import DeleteDocumentPayload, JobEnvelope
+from graphrag.core.events import DELETE_DOCUMENT, DeleteDocumentPayload, JobEnvelope
 from graphrag.core.models import DocumentStatus
 from graphrag.services.ingestion.service import DeletionService, ProjectionService
 
@@ -47,4 +47,4 @@ async def delete_document(ctx: dict[str, Any], env: JobEnvelope[DeleteDocumentPa
         )
         await service.delete(env.payload.doc_id)
 
-    await run_task("delete_document", ctx, env, _body, on_failure=_on_failure)
+    await run_task(DELETE_DOCUMENT, ctx, env, _body, on_failure=_on_failure)

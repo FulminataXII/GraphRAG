@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from graphrag.apps.worker.tasks._common import run_task
-from graphrag.core.events import JobEnvelope, ProjectPayloadPayload
+from graphrag.core.events import PROJECT_CHUNK_PAYLOAD, JobEnvelope, ProjectPayloadPayload
 from graphrag.services.ingestion.service import ProjectionService
 
 
@@ -31,4 +31,4 @@ async def project_chunk_payload(
         )
         await service.project(env.payload.chunk_ids)
 
-    await run_task("project_chunk_payload", ctx, env, _body)
+    await run_task(PROJECT_CHUNK_PAYLOAD, ctx, env, _body)

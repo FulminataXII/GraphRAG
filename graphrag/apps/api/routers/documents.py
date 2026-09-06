@@ -19,7 +19,13 @@ from graphrag.apps._upload_storage import persist_upload
 from graphrag.apps.api.deps import get_container
 from graphrag.apps.api.main import Container
 from graphrag.core.errors import ValidationError
-from graphrag.core.events import DeleteDocumentPayload, IngestDocumentPayload, JobEnvelope
+from graphrag.core.events import (
+    DELETE_DOCUMENT,
+    INGEST_DOCUMENT,
+    DeleteDocumentPayload,
+    IngestDocumentPayload,
+    JobEnvelope,
+)
 from graphrag.services.ingestion.service import document_id, document_sha256
 
 router = APIRouter(prefix="/v1/documents", tags=["documents"])
@@ -90,7 +96,7 @@ async def create_document(
         )
 
     job_id = await container.job_queue.enqueue(
-        "ingest_document",
+        INGEST_DOCUMENT,
         JobEnvelope(
             correlation_id=correlation_id,
             otel={},
@@ -115,7 +121,7 @@ async def delete_document(
     `services.ingestion.service.DeletionService`."""
     correlation_id = str(request.scope.get("correlation_id") or "unknown")
     job_id = await container.job_queue.enqueue(
-        "delete_document",
+        DELETE_DOCUMENT,
         JobEnvelope(
             correlation_id=correlation_id,
             otel={},

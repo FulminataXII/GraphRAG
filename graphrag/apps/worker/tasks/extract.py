@@ -26,6 +26,8 @@ from graphrag.adapters.clock import SystemClock
 from graphrag.apps.worker.tasks._common import run_task
 from graphrag.core.errors import AppError
 from graphrag.core.events import (
+    EXTRACT_ENTITIES,
+    RESOLVE_ENTITIES,
     ExtractEntitiesPayload,
     JobEnvelope,
     ResolveEntitiesPayload,
@@ -140,7 +142,7 @@ async def extract_entities(ctx: dict[str, Any], env: JobEnvelope[ExtractEntities
         if record is not None and record.status == DocumentStatus.EXTRACTING:
             await container.ledger.set_status(env.payload.doc_id, DocumentStatus.RESOLVING)
         await container.job_queue.enqueue(
-            "resolve_entities",
+            RESOLVE_ENTITIES,
             JobEnvelope(
                 correlation_id=env.correlation_id,
                 otel={},
@@ -151,7 +153,7 @@ async def extract_entities(ctx: dict[str, Any], env: JobEnvelope[ExtractEntities
             ),
         )
 
-    await run_task("extract_entities", ctx, env, _body, on_failure=_on_failure)
+    await run_task(EXTRACT_ENTITIES, ctx, env, _body, on_failure=_on_failure)
 
 
 __all__ = ["extract_entities", "extract_mentions"]
