@@ -143,7 +143,15 @@ services:
       GROQ_API_KEY_2: ${GROQ_API_KEY_2}
       GEMINI_API_KEY_1: ${GEMINI_API_KEY_1}
       GEMINI_API_KEY_2: ${GEMINI_API_KEY_2}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY_1}
+      # Numbered, like every other provider key. It used to arrive as the unnumbered
+      # OPENROUTER_API_KEY while litellm/config.yaml declares os.environ/OPENROUTER_API_KEY_1,
+      # so the name it asks for did not exist in the container and `judge-alt-vendor` resolved
+      # only through LiteLLM's fallback to the conventional provider variable. That fallback is
+      # undocumented behaviour, and judge-alt-vendor is the fallback TARGET for both
+      # synth-quality and fast-low-latency, so it would have died quietly if it ever changed.
+      # The `_1` suffix is the project convention even with one key, so adding a second is a
+      # config change and never a rename.
+      OPENROUTER_API_KEY_1: ${OPENROUTER_API_KEY_1}
       # OTel callback (litellm/config.yaml's `litellm_settings.callbacks: ["otel"]`) reads these
       # standard OTel env vars directly — this is a third-party binary, not our app, so it does
       # NOT go through graphrag/adapters/telemetry/otel.py or a GRAPHRAG_-prefixed setting.
