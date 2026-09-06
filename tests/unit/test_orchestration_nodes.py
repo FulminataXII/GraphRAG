@@ -70,8 +70,17 @@ async def test_each_node_is_pure(container: Any):
         RoutePlanOut,
     )
 
+    # Scripted by LLM ROLE, which is what `deps.llm.structured(role=...)` is called with — not
+    # by node name. These five queues used to be keyed "plan_route"/"grade_context"/
+    # "rewrite_query"/"generate"/"verify_grounded", none of which any node ever requests, so
+    # every LLM-backed node hit an empty queue, raised `LLMProviderExhausted`, and landed in the
+    # `except` branch below. The success path — the one that checks a node returns a dict — has
+    # never run for any of them.
+    #
+    # `router` serves BOTH plan_route and rewrite_query, so its queue carries one of each shape;
+    # `FakeLLMClient` dispenses the first item matching the requested schema.
     container.llm_client.script_structured(
-        "plan_route",
+        "router",
         RoutePlanOut(
             strategy="vector",
             template="neighbors",
@@ -80,19 +89,17 @@ async def test_each_node_is_pure(container: Any):
             sub_queries=[],
             rationale="",
         ),
+        RewrittenQuery(query="what?", changed_because=""),
     )
-    container.llm_client.script_structured("grade_context", RelevanceGradeBatch(grades=[]))
+    container.llm_client.script_structured("grader", RelevanceGradeBatch(grades=[]))
     container.llm_client.script_structured(
-        "rewrite_query", RewrittenQuery(query="what?", changed_because="")
-    )
-    container.llm_client.script_structured(
-        "generate",
+        "synth",
         AnswerOut(
             text="ans", citations=[CitationOut(chunk_id="chunk1", quote=None)], confidence=1.0
         ),
     )
     container.llm_client.script_structured(
-        "verify_grounded", Entailment(supported=True, score=1.0, unsupported_spans=[])
+        "judge", Entailment(supported=True, score=1.0, unsupported_spans=[])
     )
 
     for node_func in nodes:
