@@ -35,8 +35,9 @@ model_list:
 
   - model_name: synth-quality
     litellm_params:
-      model: gemini/gemini-3.1-pro-preview
+      model: gemini/gemini-3.7-flash
       api_key: os.environ/GEMINI_API_KEY_2
+      reasoning_effort: medium
       # Per-DEPLOYMENT ceiling on one upstream attempt. Without it the per-attempt timeout is
       # effectively unbounded, so the app-side ceiling (base.yaml llm.roles.synth.timeout_s: 120)
       # becomes the only thing that fires -- and because that ceiling covers the whole sequence

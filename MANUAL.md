@@ -73,7 +73,7 @@ Some terms used throughout, so nothing is implied:
 | `make` | GNU Make, the task runner. **Ubuntu-only** — it does not exist in PowerShell, which is one reason M-0 has you work inside WSL2. Installed via `apt install make`. |
 | `make up` / `make down` | Wrappers for `docker compose up -d` / `down`. You'll write them in BO-00; they exist so you never mistype a profile flag. |
 | **profile** | A Docker Compose label that groups services. `--profile core` starts the databases and app; `--profile obs` adds Grafana and Phoenix. Services without a matching profile stay stopped. Lets you run a lean loop and a full demo from one file. |
-| `make test` | `pytest -m "not integration and not eval"` — fast, no containers. `make test-int` adds integration tests, which need `make up` first; it also starts the isolated `neo4j-test` container they run against. |
+| `make test` | `pytest -m "not integration and not eval"` — fast, no containers. `make test-int` adds integration tests, which need `make up` first. |
 | `[G]` in the build order | A **gate** test. It guards a failure that produces no error message. If a `[G]` test is red, stop; do not proceed to the next BO. |
 | `[T]` / `[C]` | A test / a component to implement. |
 | `X` next to a BO | Blocked on a task of yours (M-2, M-3, or M-5). Do it *before* starting that BO. |
@@ -101,6 +101,199 @@ git reset --hard bo-0X          # back to the last good checkpoint
 ```
 Then restart that BO in a new session. Re-running a BO from a clean checkpoint is almost always
 faster than debugging a session that has lost the thread.
+
+---
+
+## `config.example.yaml` is read-only, with one standing exception
+
+`config.example.yaml` is listed among the read-only files Claude Code must not edit. That rule
+exists so it can't change a contract to make its own work pass. It has one exception, and Claude
+Code was right to flag the tension rather than assume:
+
+**When a change alters the config schema — a new field, a renamed key, a removed one — the mirror
+into `config.example.yaml` is part of the change, not a spec edit.** `config/schema.py` is
+`extra="forbid"`, so a template that omits a new field or keeps a removed one is a template that
+fails validation. It is code-adjacent in a way the four `.md` specs are not.
+
+Value changes are different, with one carve-out that this audit forced.
+
+**A value that is a bug fix must be mirrored. A value that is tuning preference need not be.** The
+test is whether `config.example.yaml` still describes a system that works. It is what a fresh clone
+starts from — and after round 4 it sat at `grader.max_tokens: 300` and `synth.max_tokens: 1200`,
+the exact values proven to truncate mid-JSON and make the grader fail open. A template that
+reproduces a fixed bug is worse than no template.
+
+So: if a value changed because the old one was **broken**, mirror it. If it changed because the new
+one is **better for this deployment** — a model choice, a threshold tuned to this corpus — leave the
+template alone and report the divergence. When it's genuinely unclear which, report and ask rather
+than guessing; a divergence surfaced costs a sentence, a divergence assumed costs somebody a day.
+
+The four `.md` spec files have no exception. Report gaps; never edit.
+
+---
+
+## Finding out what synth has actually been running on
+
+`model_group` in `LiteLLM_SpendLogs` records the deployment that **served** the call. When a call
+falls back, the row lands under the fallback's group, and the requested one is preserved in
+`metadata.original_model_group`. So querying `model_group = 'synth-quality'` and getting nothing
+does not mean synth never ran — it can equally mean every synth call fell back.
+
+Query the field that actually answers it:
+
+Read the key from `.env` rather than pasting it — a master key in your shell history is a master
+key in your shell history:
+
+```bash
+cd ~/projects/GraphRAG
+export $(grep -E "^LITELLM_MASTER_KEY=" .env | xargs)
+
+curl -s "http://localhost:4000/spend/logs" \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" | python3 -c "
+import json, sys
+from collections import Counter
+rows = json.load(sys.stdin)
+pairs = Counter()
+for r in rows:
+    md = r.get('metadata') or {}
+    pairs[(md.get('original_model_group'), r.get('model_group'), r.get('model'))] += 1
+for (orig, served, model), n in sorted(pairs.items(), key=lambda x: -x[1]):
+    flag = '  <-- FELL BACK' if orig and served and orig != served else ''
+    print(f'{n:4}  requested={orig}  served={served}  model={model}{flag}')
+"
+```
+
+No `api_key=` filter: `api_key` is stored hashed in the spend logs so a raw value won't match, and
+this is a single-user local deployment with nothing to filter out.
+
+Any line where `requested` and `served` differ is a fallback. What to look for:
+
+- **`requested=synth-quality` rows exist** → synth has been running, just served elsewhere. Read
+  which model actually answered.
+- **`requested=synth-quality  served=judge-alt-vendor`** → this is the one I'd expect. The
+  `fallbacks` map has `synth-quality: [judge-alt-vendor]`, and there's a judge row with 1065
+  completion tokens against judge's `max_tokens: 500` — well under synth's 1200. That row is very
+  likely a fallen-back synth call, which would mean **synthesis has been running on the judge
+  model.** That's the self-preference-bias separation defeated from the other direction: judge is
+  deliberately off Google so it doesn't grade its own vendor's output, and if synth *is* judge, the
+  judge grades its own work.
+- **No `synth-quality` under either field** → then the conclusion stands and synth genuinely never
+  ran. Worth knowing, but check the log window covers the queries you ran.
+
+Now that `synth-quality` points at `gemini-3.7-flash` and has a 30s gateway timeout, re-run one
+query and check the same output. If `requested` and `served` both read `synth-quality`, the
+migration fixed it.
+
+**Two things to verify on the model change while you're there.** The config is bind-mounted, so it
+needs `docker compose restart litellm` — not a rebuild, but not nothing either. And add
+`reasoning_effort: medium` explicitly alongside the model. It is 3.7 Flash's own default, so this
+changes no behaviour today — but this project has now been bitten twice by an implicit provider
+default, and an explicit value is a value someone can see. Note `minimal` is invalid on 3.7 Flash
+and returns an API validation error.
+
+---
+
+## Clean re-ingest before M-5
+
+The stores are currently inconsistent: Neo4j had zero nodes and `graphrag.documents` zero rows,
+while Qdrant still held 129 chunk points and 161 entity points. Integration tests wipe Neo4j and
+Postgres around every test that uses them; nothing wipes Qdrant. So the graph and the ledger were
+destroyed and the vector data was orphaned.
+
+The DON'T on line 886 of this manual already warned about this and it happened anyway — because the
+damage is silent and partial. A half-wiped corpus doesn't error; it just answers worse.
+
+**Order matters. Wipe all three, then ingest once.**
+
+```bash
+cd ~/projects/GraphRAG
+docker compose ps --all          # everything healthy first
+```
+
+**1. Confirm the damage, so you know what you're fixing:**
+
+```bash
+# Qdrant collections and point counts
+curl -s http://localhost:6333/collections | python3 -m json.tool
+# Postgres ledger
+docker compose exec postgres psql -U postgres -d graphrag -c "select count(*) from graphrag.documents;"
+# Neo4j
+docker compose exec neo4j cypher-shell -u neo4j -p "$NEO4J_PASSWORD" "MATCH (n) RETURN count(n);"
+```
+
+**2. Wipe all three.** Check the Makefile first — if a reset target exists, use it instead:
+
+```bash
+grep -nE "^(reset|clean|nuke)" Makefile
+```
+
+Otherwise, drop the Qdrant collections by name (from step 1's output), then let the app recreate
+them:
+
+```bash
+curl -X DELETE http://localhost:6333/collections/<chunks-collection>
+curl -X DELETE http://localhost:6333/collections/<entities-collection>
+
+docker compose exec postgres psql -U postgres -d graphrag -c "TRUNCATE graphrag.documents CASCADE;"
+docker compose exec neo4j cypher-shell -u neo4j -p "$NEO4J_PASSWORD" "MATCH (n) DETACH DELETE n;"
+
+docker compose restart api worker projection-worker    # ensure_collections/ensure_schema recreate
+```
+
+**3. Re-ingest, then verify all three agree:**
+
+```bash
+graphrag ingest corpus/
+```
+
+Extraction is real quota, so let it finish before querying. Then re-run the three counts from step
+1. Postgres document count, Qdrant chunk points, and Neo4j nodes should all be non-zero and
+consistent with 14 documents. **If any one is zero, stop** — that is the same inconsistency again
+and building a golden set on it wastes the effort.
+
+**4. Do not run `make test-int` between the re-ingest and M-5.** It will wipe Neo4j and Postgres
+again and leave you exactly where you started. Once test isolation is fixed this stops mattering;
+until then, treat re-ingest and `test-int` as mutually exclusive.
+
+---
+
+## Stripping AI co-author trailers from commits
+
+Claude Code adds `Co-Authored-By: Claude ...` trailers by default. Every stage prompt now forbids
+this, but if some slip through, here's how to remove them.
+
+**Check first:**
+
+```bash
+git log --format='%H %s%n%b' -20 | grep -i -B2 "co-authored-by"
+```
+
+**If the commits are unpushed** (the usual case here), rewrite them in place:
+
+```bash
+git rebase -i <hash-before-the-first-affected-commit>
+# mark each affected commit `reword`, delete the trailer lines in the editor
+```
+
+**If there are many**, strip them all in one pass instead of by hand:
+
+```bash
+git filter-branch -f --msg-filter 'grep -v -i "^Co-Authored-By:"' <first-bad-hash>^..HEAD
+```
+
+`filter-branch` rewrites every commit after that point, so all later hashes change. Fine while the
+work is local; if you have already pushed, it means a force-push, which is only safe because nobody
+else is working in this repo.
+
+**Verify afterwards, and check the tree is unchanged:**
+
+```bash
+git log --format='%b' -20 | grep -i "co-authored-by"    # expect no output
+git diff <original-HEAD-hash> HEAD                       # expect empty — messages changed, code didn't
+```
+
+That second command is the one worth running. A rebase that silently drops a commit or resolves a
+conflict wrongly is easy to miss, and comparing trees catches it immediately.
 
 ---
 
@@ -823,24 +1016,7 @@ than any feature in the repo.
 - **DON'T let the agent implement across build orders.** "While I'm here I'll also add the retriever" is how you get an untested tangle. Stop it and re-scope.
 - **DON'T change a threshold to make a test pass.** Thresholds encode intent. If `routing_accuracy` is 0.68 against a 0.75 gate, fix the prompt or record 0.68 honestly.
 - **DON'T skip the IDF modifier check in BO-04.** It cannot be added later without recreating the collection and re-indexing everything.
-- **DON'T reset your demo data before `make test-int`.** You no longer need to, and the reset is
-  now the only real risk in the sequence. Integration tests cannot reach a real store: every
-  backend they touch is namespaced per run by `tests/integration/namespaces.py` —
-  Qdrant collections prefixed `test_<run>_`, a `graphrag_test_<run>` Postgres database the
-  session creates and drops, a Redis db index in 1–15 (never 0, where the arq queue the worker
-  consumes lives), and a **separate** `neo4j-test` container on port 7688 that `make test-int`
-  starts and `make up` does not. Neo4j needs its own instance rather than its own database
-  because Community Edition supports exactly one. `tests/integration/test_isolation_guard.py`
-  asserts all four differ from what `config/base.yaml` and `.env` resolve to, and
-  `tests/unit/test_integration_isolation.py` (no containers, so `make test` catches it too)
-  feeds each destructive guard a fabricated production value and asserts it refuses — so the day
-  someone points a fixture back at production, a test says so instead of a corpus quietly
-  emptying. Verify those guards that way and only that way: aiming a live fixture at a real
-  store to watch it refuse is how the real `chunks` and `entities` collections were once
-  deleted.
-  Run the suite through `make test-int`, not a bare `pytest -m integration`: the make target is
-  what starts `neo4j-test`. (A bare run fails with a message telling you this, rather than
-  falling back to 7687.)
+- **DON'T run integration tests against your demo data** without a reset — several tests delete documents.
 - **DON'T commit `.env`.** Check `gitleaks` before every push. One leaked key in a public CV repo undoes the whole project.
 - **DON'T put confidential or personal documents in `corpus/`.** Free tiers may train on prompts.
 - **DON'T let enforcement infrastructure be edited to make a build order pass.** `tests/` is only
@@ -1276,7 +1452,7 @@ narrative. You've now tested this directly, and the evidence changes the picture
 - **Only one document was ingested.** My "per-hop cap crowds it out on a busy 12-document hub"
   hypothesis cannot be the cause here — there's no hub to be crowded on a single document. That
   guess was wrong; I'm retracting it. (It's not permanently wrong — once the corpus scales back up
-  to the full 12 documents, a busy Apple hub competing for the top-25-per-hop slots becomes a real
+  to the full 14 documents, a busy Apple hub competing for the top-25-per-hop slots becomes a real
   risk again. Worth re-testing this specific query once more documents are back in, not assuming
   it's resolved for good.)
 - **Forcing `strategy: vector` produced an excellent, well-cited answer** — Jobs' return, the NeXT
