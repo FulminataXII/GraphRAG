@@ -175,11 +175,16 @@ llm:
     # 32000 output tokens in one batched extraction call — this role is why the global ceiling
     # is 300 in the first place.
     bulk: { model: bulk-high-tpm, temperature: 0.1, max_tokens: 32000, timeout_s: 300 }
-    # Between the two: 1200 output tokens is ~12s of generation at a rate a free-tier deployment
-    # sustains, but synth also absorbs num_retries: 2 and the fallback to judge-alt-vendor, and
-    # is re-entered by the repair loop. 120 = 2x the small-role ceiling, 0.4x bulk, and 30s of
-    # room past the 3 x 30s the gateway spends upstream before falling back.
-    synth: { model: synth-quality, temperature: 0.2, max_tokens: 1200, timeout_s: 120 }
+    # 2000, not the 1200 this used to be. `synth-quality` runs at `reasoning_effort: medium`
+    # (litellm/config.yaml) and reasoning tokens are spent against the SAME ceiling as the
+    # answer: measured through the gateway on a real `generate` call, completion tokens land at
+    # 652-938, i.e. 78% of 1200 at worst. A longer answer or a heavier thinking pass crosses it,
+    # truncates mid-JSON, and produces exactly the failure `grade_context` had at 300 -- one
+    # provider over. `max_tokens` is a ceiling, not a reservation, so the headroom costs nothing
+    # unless it is used; same reasoning that took `bulk` to 32000.
+    # timeout_s 120 = 2x the small-role ceiling, 0.4x bulk, and 30s of room past the 3 x 30s the
+    # gateway spends upstream before falling back.
+    synth: { model: synth-quality, temperature: 0.2, max_tokens: 2000, timeout_s: 120 }
     judge: { model: judge-alt-vendor, temperature: 0.0, max_tokens: 500, timeout_s: 60 }
     # Test-only role (tests/integration/test_litellm_client.py::test_gateway_fallback), resolves
     # to litellm/config.yaml's test-fallback-chain alias. max_tokens: 1 to minimize quota spend —
