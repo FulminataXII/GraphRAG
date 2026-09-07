@@ -74,7 +74,7 @@ ingestion:
     casefold_for_hash: true
     strip_zero_width: true
   parallelism:
-    max_concurrent_docs: 4
+    max_concurrent_docs: 1
     max_concurrent_chunks: 32
   payload_projection:
     queue_name: projection
@@ -185,7 +185,7 @@ llm:
   # `timeout` in litellm/config.yaml times the attempts LiteLLM makes, or the app aborts the
   # request before the fallback it depends on is ever tried.
   roles:
-    router: { model: fast-low-latency, temperature: 0.0, max_tokens: 800, timeout_s: 60 }
+    router: { model: fast-low-latency, temperature: 0.0, max_tokens: 2000, timeout_s: 60 }
     # 300 was never enough and the grader has therefore never graded anything. `grade_context`
     # returns a verdict + a <=200-char reason per chunk for `orchestration.grader.batch_size: 8`
     # chunks, and `fast-low-latency` is a reasoning model: measured against Groq directly, one
