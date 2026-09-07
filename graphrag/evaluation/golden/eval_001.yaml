@@ -1,0 +1,399 @@
+-   id: sh-001
+    question: "What is the standard starting storage capacity for the new MacBook Pro equipped with the M5 Max chip?"
+    category: single_hop
+    gold_route: vector
+    gold_chunk_ids:
+    gold_answer: "2TB."
+    must_refuse: false
+
+-   id: sh-002
+    question: "When was Steve Jobs pushed out of Apple?"
+    category: single_hop
+    gold_route: vector
+    gold_chunk_ids: []
+    gold_answer: "1985."
+    must_refuse: false
+
+-   id: sh-003
+    question: "What year did Apple release the original iPhone?"
+    category: single_hop
+    gold_route: vector
+    gold_chunk_ids: []
+    gold_answer: "2007."
+    must_refuse: false
+
+-   id: sh-004
+    question: "On what date did Steve Jobs resign as CEO of Apple?"
+    category: single_hop
+    gold_route: vector
+    gold_chunk_ids: []
+    gold_answer: "August 24, 2011."
+    must_refuse: false
+
+-   id: sh-005
+    question: "How many US jobs does Apple support?"
+    category: single_hop
+    gold_route: vector
+    gold_chunk_ids: []
+    gold_answer: "Over 2 million."
+    must_refuse: false
+
+-   id: sh-006
+    question: "How many App Store developers are in the US?"
+    category: single_hop
+    gold_route: vector
+    gold_chunk_ids: []
+    gold_answer: "Over 1 million."
+    must_refuse: false
+
+-   id: sh-007
+    question: "What is the square footage of Apple's new Advanced Manufacturing Center in Houston?"
+    category: single_hop
+    gold_route: vector
+    gold_chunk_ids: []
+    gold_answer: "250,000-square-foot."
+    must_refuse: false
+
+-   id: sh-008
+    question: "What ports are located on the front of the Mac mini with M6?"
+    category: single_hop
+    gold_route: vector
+    gold_chunk_ids: []
+    gold_answer: "Two USB-C ports with USB 3."
+    must_refuse: false
+
+-   id: sh-009
+    question: "What is the base storage capacity of the 14-inch MacBook Pro with M5?"
+    category: single_hop
+    gold_route: vector
+    gold_chunk_ids: []
+    gold_answer: "1TB."
+    must_refuse: false
+
+-   id: sh-010
+    question: "What is the screen size of the MacBook Neo?"
+    category: single_hop
+    gold_route: vector
+    gold_chunk_ids: []
+    gold_answer: "13-inch."
+    must_refuse: false
+
+-   id: sh-011
+    question: "How much did Apple invest in Broadcom's Fort Collins facility?"
+    category: single_hop
+    gold_route: vector
+    gold_chunk_ids: []
+    gold_answer: "$1.5 billion."
+    must_refuse: false
+
+-   id: sh-012
+    question: "Where does Broadcom manufacture its FBAR filters?"
+    category: single_hop
+    gold_route: vector
+    gold_chunk_ids: []
+    gold_answer: "Fort Collins, Colorado."
+    must_refuse: false
+
+-   id: sh-013
+    question: "How much faster is the M5 Max compared to the M1 Max for video processing?"
+    category: single_hop
+    gold_route: vector
+    gold_chunk_ids: []
+    gold_answer: "Up to 2.9x."
+    must_refuse: false
+
+-   id: sh-014
+    question: "What specific video format can the M5 Ultra's Media Engine play 33 streams of simultaneously?"
+    category: single_hop
+    gold_route: vector
+    gold_chunk_ids: []
+    gold_answer: "8K ProRes 422 at 30 fps."
+    must_refuse: false
+
+-   id: sh-015
+    question: "When will John Ternus officially become Apple's CEO?"
+    category: single_hop
+    gold_route: vector
+    gold_chunk_ids: []
+    gold_answer: "September 1, 2026."
+    must_refuse: false
+
+-   id: sh-016
+    question: "What degree does John Ternus hold from the University of Pennsylvania?"
+    category: single_hop
+    gold_route: vector
+    gold_chunk_ids: []
+    gold_answer: "Bachelor's degree in Mechanical Engineering."
+    must_refuse: false
+
+-   id: sh-017
+    question: "What operating system did Apple acquire when it purchased NeXT?"
+    category: single_hop
+    gold_route: vector
+    gold_chunk_ids: []
+    gold_answer: "NeXTSTEP."
+    must_refuse: false
+
+-   id: sh-018
+    question: "In what year did Arthur D. Levinson become the chief executive officer of Genentech?"
+    category: single_hop
+    gold_route: vector
+    gold_chunk_ids: []
+    gold_answer: "1995."
+    must_refuse: false
+
+-   id: sh-019
+    question: "What specific model of smartphone did Apple manufacturer partners begin producing at the Bengaluru facility in April 2019?"
+    category: single_hop
+    gold_route: vector
+    gold_chunk_ids: []
+    gold_answer: "iPhone 7."
+    must_refuse: false
+
+-   id: sh-020
+    question: "What is the specific clock speed or transfer bandwidth capability supported by Thunderbolt 5 ports on the new Mac Studio?"
+    category: single_hop
+    gold_route: vector
+    gold_chunk_ids: []
+    gold_answer: "Transfer speeds up to 120Gb/s of bandwidth."
+    must_refuse: false
+
+-   id: mh-001
+    question: "What is the academic background of the engineer who is stepping up to become Apple's CEO in September 2026?"
+    category: multi_hop
+    gold_route: hybrid
+    gold_chunk_ids: []
+    gold_answer: "John Ternus holds a bachelor's degree in Mechanical Engineering from the University of Pennsylvania."
+    must_refuse: false
+
+-   id: mh-002
+    question: "What is the name of the company acquired by Apple for its NeXTSTEP operating system, and how much did Apple pay to acquire it?"
+    category: multi_hop
+    gold_route: hybrid
+    gold_chunk_ids: []
+    gold_answer: "Apple acquired NeXT for $427 million in cash, stock, stock options, and assumed debt."
+    must_refuse: false
+
+-   id: mh-003
+    question: "Which biotechnology company led by Apple board chairman Arthur D. Levinson had its research collaboration terminated by AbbVie in November 2025?"
+    category: multi_hop
+    gold_route: hybrid
+    gold_chunk_ids: []
+    gold_answer: "Calico (Calico Life Sciences LLC)."
+    must_refuse: false
+
+-   id: mh-004
+    question: "What is the starting education price for the Mac mini equipped with the Apple silicon chip that features exactly 2 super cores?"
+    category: multi_hop
+    gold_route: hybrid
+    gold_chunk_ids: []
+    gold_answer: "$799 (U.S.)."
+    must_refuse: false
+
+-   id: mh-005
+    question: "In what year did the person who will succeed Tim Cook as Apple's CEO first join the company's product design team?"
+    category: multi_hop
+    gold_route: hybrid
+    gold_chunk_ids: []
+    gold_answer: "2001."
+    must_refuse: false
+
+-   id: mh-006
+    question: "In which city is the facility located that is scheduled to manufacture the desktop computer debuting Apple's M6 chip?"
+    category: multi_hop
+    gold_route: hybrid
+    gold_chunk_ids: []
+    gold_answer: "Houston."
+    must_refuse: false
+
+-   id: mh-007
+    question: "According to Forbes, what was the estimated net worth in December 2025 of the individual who will become the executive chairman of Apple's board of directors in September 2026?"
+    category: multi_hop
+    gold_route: hybrid
+    gold_chunk_ids: []
+    gold_answer: "$2.6 billion."
+    must_refuse: false
+
+-   id: mh-008
+    question: "What specific type of wireless connectivity components are produced at the Colorado facility where Apple is investing $1.5 billion for expansion and modernization?"
+    category: multi_hop
+    gold_route: hybrid
+    gold_chunk_ids: []
+    gold_answer: "FBAR (Film Bulk Acoustic Resonator) filters."
+    must_refuse: false
+
+-   id: mh-009
+    question: "What degree did the chief executive officer of the Alphabet Inc. venture Calico earn from Princeton University in 1977?"
+    category: multi_hop
+    gold_route: hybrid
+    gold_chunk_ids: []
+    gold_answer: "A Doctor of Philosophy in biomedical sciences."
+    must_refuse: false
+
+-   id: mh-010
+    question: "What is the specific display resolution of Apple's most affordable laptop ever, which starts at a base price of $599?"
+    category: multi_hop
+    gold_route: hybrid
+    gold_chunk_ids: []
+    gold_answer: "2408-by-1506 resolution."
+    must_refuse: false
+
+-   id: mh-011
+    question: "What is the starting consumer price (in U.S. dollars) of the Apple product scheduled to begin manufacturing this year at the same Houston facility that builds Apple's advanced AI servers?"
+    category: multi_hop
+    gold_route: hybrid
+    gold_chunk_ids: []
+    gold_answer: "$899 (U.S.)."
+    must_refuse: false
+
+-   id: mh-012
+    question: "What specific drug failed a Phase II/III clinical trial for ALS, directly leading AbbVie to terminate its collaboration with the biotechnology company led by Apple's current board chairman?"
+    category: multi_hop
+    gold_route: hybrid
+    gold_chunk_ids: []
+    gold_answer: "fosigotifator."
+    must_refuse: false
+
+-   id: mh-013
+    question: "In what year did the individual who serves as both the chairman of Apple Inc. and the CEO of Calico receive his Doctor of Philosophy degree?"
+    category: multi_hop
+    gold_route: vector
+    gold_chunk_ids: []
+    gold_answer: "1977."
+    must_refuse: false
+
+-   id: mh-014
+    question: "How much unified memory is supported by the Apple silicon chip featuring a 12-core CPU complex that consists of 2 super cores, 4 performance cores, and 6 efficiency cores?"
+    category: multi_hop
+    gold_route: hybrid
+    gold_chunk_ids: []
+    gold_answer: "Up to 32GB of unified memory."
+    must_refuse: false
+
+-   id: mh-015
+    question: "In what year did the executive scheduled to become Apple's next CEO on September 1, 2026, first get promoted to a vice president of Hardware Engineering?"
+    category: multi_hop
+    gold_route: hybrid
+    gold_chunk_ids: []
+    gold_answer: "2013."
+    must_refuse: false
+
+-   id: th-001
+    question: "Across Apple's recent supply chain and infrastructure announcements, how is the company expanding its domestic manufacturing footprint within the United States?"
+    category: thematic
+    gold_route: hybrid
+    gold_chunk_ids: []
+    gold_answer: "Apple is expanding its U.S. manufacturing footprint through key investments, primarily by partnering with Broadcom via a $1.5 billion capital expenditure to modernize and expand FBAR filter manufacturing in Fort Collins, Colorado, and by utilizing its Advanced Manufacturing Center (AMC) within its Houston, Texas facility to build advanced AI servers and commence manufacturing of the new Mac mini."
+    must_refuse: false
+
+-   id: th-002
+    question: "Across the newest generation of Apple silicon, how do the CPU core architectures of the M6 and M5 Ultra chips differ, and how does the memory architecture of the M6 specifically support advanced artificial intelligence workloads?"
+    category: thematic
+    gold_route: hybrid
+    gold_chunk_ids: []
+    gold_answer: "The M5 Ultra features a highly scaled up-to-36-core CPU with 12 super cores and 24 performance cores. In contrast, the M6 features a 12-core CPU complex consisting of 2 super cores, 4 performance cores, and 6 efficiency cores. To support AI workloads, the M6 utilizes up to 32GB of unified memory specifically designed to run Large Language Models (LLMs) on-device for private, agentic tasks."
+    must_refuse: false
+
+-   id: th-003
+    question: "Based on the provided documents, how does the succession of Apple's CEO position connect the founder of the acquired NeXT company to the planned executive board transition in 2026?"
+    category: thematic
+    gold_route: hybrid
+    gold_chunk_ids: []
+    gold_answer: "Steve Jobs, who founded NeXT (which Apple acquired), served as Apple's CEO and was succeeded by Tim Cook. Continuing this lineage, Tim Cook will step down to become the executive chairman of Apple's board of directors, and will be succeeded as CEO by John Ternus effective September 1, 2026."
+    must_refuse: false
+
+-   id: th-004
+    question: "How has Apple structured its education pricing across its newly introduced entry-level and professional Mac lineup (MacBook Neo, Mac mini with M6, and 14-inch MacBook Pro with M5)?"
+    category: thematic
+    gold_route: hybrid
+    gold_chunk_ids: []
+    gold_answer: "Apple offers a consistent discounted education pricing tier across its new Mac lineup: the entry-level MacBook Neo starts at $499 for education (down from $599), the Mac mini with M6 starts at $799 for education (down from $899), and the standard 14-inch MacBook Pro with M5 starts at $1,599 for education (down from $1,699)."
+    must_refuse: false
+
+-   id: th-005
+    question: "How do the high-speed I/O specifications and Media Engine enhancements in the Mac Studio equipped with M5 Ultra combine to support intensive professional video workflows?"
+    category: thematic
+    gold_route: hybrid
+    gold_chunk_ids: []
+    gold_answer: "The Mac Studio with M5 Ultra pairs high-bandwidth external data transfer with massive simultaneous media decoding: its Thunderbolt 5 ports deliver transfer speeds up to 120Gb/s of bandwidth to connect high-performance peripherals, displays, and external storage, while its enhanced Media Engine features twice the video encode and decode blocks of M5 Max, allowing professionals to simultaneously play up to 33 streams of 8K ProRes 422 video at 30 fps."
+    must_refuse: false
+
+-   id: th-006
+    question: "How do the academic qualifications and early career backgrounds of Apple board chairman Arthur D. Levinson and incoming CEO John Ternus reflect differing domain expertise across Apple's executive leadership?"
+    category: thematic
+    gold_route: hybrid
+    gold_chunk_ids: []
+    gold_answer: "Arthur D. Levinson brings a deep background in biomedical sciences, holding a BS in molecular biology from the University of Washington (1972) and a PhD in biomedical sciences from Princeton University (1977), later leading biotechnology ventures Genentech and Calico. In contrast, John Ternus brings engineering and hardware design expertise, holding a bachelor's degree in Mechanical Engineering from the University of Pennsylvania and working at Virtual Research Systems before joining Apple's product design team in 2001."
+    must_refuse: false
+
+-   id: th-007
+    question: "How do Apple's manufacturing initiatives in Bengaluru, India and Houston, Texas illustrate distinct facets of its global production and assembly operations?"
+    category: thematic
+    gold_route: hybrid
+    gold_chunk_ids: []
+    gold_answer: "Apple's international manufacturing strategy has involved establishing regional consumer device assembly, such as initiating production of the iPhone 7 at its Bengaluru facility in April 2019. In contrast, Apple's domestic strategy emphasizes advanced infrastructure and centralized desktop hardware, utilizing its Houston facility to house the Advanced Manufacturing Center (AMC), build and ship advanced AI servers, and manufacture the new Mac mini."
+    must_refuse: false
+
+-   id: th-008
+    question: "How does Apple scale its \"super core\" CPU architecture across different performance tiers in the M6 and M5 Ultra chips?"
+    category: thematic
+    gold_route: hybrid
+    gold_chunk_ids: []
+    gold_answer: "Apple scales the super core implementation according to machine class: for standard desktop computing, the M6 introduces a 12-core CPU complex that features 2 super cores (along with 4 performance cores and 6 efficiency cores). For high-end professional workstation computing, the M5 Ultra significantly scales this design to an up-to-36-core CPU incorporating 12 super cores and 24 performance cores to achieve 1.3x higher multithreaded performance over the M3 Ultra."
+    must_refuse: false
+
+-   id: th-009
+    question: "How do the outcomes of Apple's historical acquisition of NeXT compare with the joint development trajectory of Calico and AbbVie described in the documents?"
+    category: thematic
+    gold_route: hybrid
+    gold_chunk_ids: []
+    gold_answer: "Apple's acquisition of NeXT for $427 million successfully integrated the NeXTSTEP operating system into Apple's product foundation and restored founder Steve Jobs to the company's executive leadership lineage. In contrast, the life sciences collaboration between AbbVie and Alphabet venture Calico (led by Apple chairman Arthur D. Levinson) did not reach commercialization and was terminated by AbbVie in November 2025 following the clinical failure of fosigotifator in a Phase II/III trial for ALS."
+    must_refuse: false
+
+-   id: th-010
+    question: "How is the MacBook Neo positioned within Apple's broader portable lineup regarding accessibility, entry pricing, and display specifications?"
+    category: thematic
+    gold_route: hybrid
+    gold_chunk_ids: []
+    gold_answer: "The MacBook Neo is positioned as Apple's most affordable laptop ever, aimed at making the Mac experience accessible to millions globally at a breakthrough starting price of $599 ($499 for education). Despite its entry-level market tier, it provides standard Apple display quality via a 13-inch Liquid Retina display with 2408-by-1506 resolution, 500 nits of brightness, and support for 1 billion colors."
+    must_refuse: false
+
+-   id: un-001
+    question: "What is the maximum clock frequency (in GHz) of the new \"super cores\" introduced in the M6 chip's 12-core CPU complex?"
+    category: unanswerable
+    gold_route: hybrid
+    gold_chunk_ids: []
+    gold_answer: null
+    must_refuse: true
+
+-   id: un-002
+    question: "Who is scheduled to succeed John Ternus as Apple's senior vice president of Hardware Engineering once he assumes the role of CEO on September 1, 2026?"
+    category: unanswerable
+    gold_route: hybrid
+    gold_chunk_ids: []
+    gold_answer: null
+    must_refuse: true
+
+-   id: un-003
+    question: "Which contract manufacturing partner did Apple collaborate with to operate the assembly facility for the iPhone 7 in Bengaluru starting in April 2019?"
+    category: unanswerable
+    gold_route: hybrid
+    gold_chunk_ids: []
+    gold_answer: null
+    must_refuse: true
+
+-   id: un-004
+    question: "What is the specific battery capacity (in watt-hours) of the newly unveiled 13-inch MacBook Neo?"
+    category: unanswerable
+    gold_route: hybrid
+    gold_chunk_ids: []
+    gold_answer: null
+    must_refuse: true
+
+-   id: un-005
+    question: "What is the total capital expenditure allocated for Apple's Advanced Manufacturing Center (AMC) facility in Houston to support AI server and Mac mini production?"
+    category: unanswerable
+    gold_route: hybrid
+    gold_chunk_ids: []
+    gold_answer: null
+    must_refuse: true
