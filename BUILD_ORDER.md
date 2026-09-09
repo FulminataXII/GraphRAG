@@ -387,13 +387,6 @@ Legend: `[C]` component · `[T]` test · `[G]` gate (must pass to proceed)
 - `[T]` `test_max_hops_mismatch_raises` — set `retrieval.graph.max_hops` to a value the
   `neighbors` template wasn't written for; `Neo4jGraphStore.__init__` must raise, not silently
   return 2-hop results.
-- `[T][G]` `[integration]` `test_co_mentioned_returns_results` — **added at BO-09 cleanup.**
-  Seed two entities MENTIONed in the same real chunk; `traverse("co_mentioned", {"entity":
-  <canonical_id>, "k": ...})` must return a non-empty result containing the other entity. BO-08's
-  version filtered on `RELATES.chunk_id` and would have passed `test_traverse_rejects_unknown_template`
-  while silently returning zero rows for every real call — this is the gate that would have caught
-  it. A test asserting only "does not raise" does not satisfy this line; assert the entity is
-  actually present in the returned paths.
 
 ---
 

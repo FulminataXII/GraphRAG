@@ -143,6 +143,8 @@ services:
       GROQ_API_KEY_2: ${GROQ_API_KEY_2}
       GEMINI_API_KEY_1: ${GEMINI_API_KEY_1}
       GEMINI_API_KEY_2: ${GEMINI_API_KEY_2}
+      GEMINI_API_KEY_3: ${GEMINI_API_KEY_3}
+      GEMINI_API_KEY_4: ${GEMINI_API_KEY_4}
       # Numbered, like every other provider key. It used to arrive as the unnumbered
       # OPENROUTER_API_KEY while litellm/config.yaml declares os.environ/OPENROUTER_API_KEY_1,
       # so the name it asks for did not exist in the container and `judge-alt-vendor` resolved

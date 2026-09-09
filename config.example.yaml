@@ -324,7 +324,7 @@ observability:
 # Evaluation
 # -----------------------------------------------------------------------------
 evaluation:
-  golden_set_path: evaluation/golden/
+  golden_set_path: graphrag/evaluation/golden/
   smoke_subset_size: 10         # what CI runs on every PR
   disable_cache_during_run: true
   metrics:

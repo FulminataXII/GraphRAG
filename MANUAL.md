@@ -193,67 +193,440 @@ and returns an API validation error.
 
 ---
 
-## Clean re-ingest before M-5
+## The first ingest — running it and watching it
 
-The stores are currently inconsistent: Neo4j had zero nodes and `graphrag.documents` zero rows,
-while Qdrant still held 129 chunk points and 161 entity points. Integration tests wipe Neo4j and
-Postgres around every test that uses them; nothing wipes Qdrant. So the graph and the ledger were
-destroyed and the vector data was orphaned.
+All four stores are empty and consistent. Nothing needs wiping: round 3's isolation work deleted the
+orphaned Qdrant collections, and integration tests can no longer reach production namespaces, so
+`make test-int` and a loaded corpus are now independent. The old "wipe all three first" procedure no
+longer applies.
 
-The DON'T on line 886 of this manual already warned about this and it happened anyway — because the
-damage is silent and partial. A half-wiped corpus doesn't error; it just answers worse.
+Round 6 repaired the task registration that made every job fail with `function not found`, so this
+is the first ingest that can actually run.
 
-**Order matters. Wipe all three, then ingest once.**
+### Before you start
 
 ```bash
 cd ~/projects/GraphRAG
-docker compose ps --all          # everything healthy first
+rm -f .claude/settings.json      # restores the harness's background-isolation default
+docker compose ps --all          # --all, or a crashed container won't appear
 ```
 
-**1. Confirm the damage, so you know what you're fixing:**
+Everything healthy, twelve containers. Then confirm the worker registers the right names — this is
+the thing that was broken, and it's cheap to verify:
 
 ```bash
-# Qdrant collections and point counts
-curl -s http://localhost:6333/collections | python3 -m json.tool
-# Postgres ledger
-docker compose exec postgres psql -U postgres -d graphrag -c "select count(*) from graphrag.documents;"
-# Neo4j
-docker compose exec neo4j cypher-shell -u neo4j -p "$NEO4J_PASSWORD" "MATCH (n) RETURN count(n);"
+docker compose logs --tail=20 worker | grep -i "registered\|functions"
 ```
 
-**2. Wipe all three.** Check the Makefile first — if a reset target exists, use it instead:
+### Run it
 
 ```bash
-grep -nE "^(reset|clean|nuke)" Makefile
+uv run graphrag ingest corpus/
 ```
 
-Otherwise, drop the Qdrant collections by name (from step 1's output), then let the app recreate
-them:
+14 documents, 328 chunks, 23 bulk extraction calls. Expect roughly 10–15 minutes; doc 11
+(`11_Apple_Inc..txt`, 125 chunks) alone is 7 sequential calls at ~30s each.
+
+Don't use `--wait` on the first run. Watch the status query below instead — it tells you *which*
+document is where, which `--wait` doesn't.
+
+### Watch it, in a second terminal
+
+The one that matters, every 30s or so:
 
 ```bash
-curl -X DELETE http://localhost:6333/collections/<chunks-collection>
-curl -X DELETE http://localhost:6333/collections/<entities-collection>
-
-docker compose exec postgres psql -U postgres -d graphrag -c "TRUNCATE graphrag.documents CASCADE;"
-docker compose exec neo4j cypher-shell -u neo4j -p "$NEO4J_PASSWORD" "MATCH (n) DETACH DELETE n;"
-
-docker compose restart api worker projection-worker    # ensure_collections/ensure_schema recreate
+watch -n 20 'docker compose exec -T postgres psql -U graphrag -d graphrag -c \
+  "SELECT status, count(*), max(updated_at) AS latest FROM documents GROUP BY status ORDER BY 2 DESC;"'
 ```
 
-**3. Re-ingest, then verify all three agree:**
+`watch -n 20` refreshes every 20s so you can leave it running in a second terminal. Drop the `watch`
+wrapper for a one-off check.
+
+Note `-U graphrag`, not `-U postgres` — there is no `postgres` role — and the table is `documents`,
+unqualified.
+
+Healthy looks like counts draining `PENDING → PARSING → EMBEDDING → EXTRACTING → RESOLVING →
+INDEXED`. **A row at `EXTRACTING` whose `latest` is more than ~6 minutes old is a stalled job.**
+Anything at `FAILED` is permanent until you force it; check `error_code`.
+
+Queue depth and the worker heartbeat:
 
 ```bash
-graphrag ingest corpus/
+docker compose exec -T redis redis-cli GET arq:queue:health-check
 ```
 
-Extraction is real quota, so let it finish before querying. Then re-run the three counts from step
-1. Postgres document count, Qdrant chunk points, and Neo4j nodes should all be non-zero and
-consistent with 14 documents. **If any one is zero, stop** — that is the same inconsistency again
-and building a golden set on it wastes the effort.
+`j_failed` climbing is the fastest failure signal. `j_ongoing` caps at 4
+(`max_concurrent_docs`).
 
-**4. Do not run `make test-int` between the re-ingest and M-5.** It will wipe Neo4j and Postgres
-again and leave you exactly where you started. Once test isolation is fixed this stops mattering;
-until then, treat re-ingest and `test-int` as mutually exclusive.
+And rate limits — nothing in the app backs off, so a 429 surviving the gateway's fallback chain
+kills a document outright:
+
+```bash
+docker compose logs --tail=400 worker  2>&1 | grep -iE "rate limited|429|! .* failed"
+docker compose logs --tail=400 litellm 2>&1 | grep -iE "429|rate.?limit"
+```
+
+Watch the litellm line especially — it shows 429s the app never sees, absorbed by gateway retries
+and fallback. A rising count there is your warning before a document actually dies.
+
+**Use `--tail` always.** On this box a bare `docker logs` silently truncates and `--since` returns
+nothing at all.
+
+### When it finishes, verify all four agree
+
+```bash
+docker compose exec -T postgres psql -U graphrag -d graphrag -c \
+  "SELECT status, count(*) FROM documents GROUP BY status;"
+
+# /collections lists names only — this gets the point counts you actually want
+for c in $(curl -s http://localhost:6333/collections \
+    | python3 -c "import json,sys; [print(x['name']) for x in json.load(sys.stdin)['result']['collections']]"); do
+  echo -n "$c: "
+  curl -s "http://localhost:6333/collections/$c" \
+    | python3 -c "import json,sys; print(json.load(sys.stdin)['result']['points_count'])"
+done
+
+docker compose exec -T neo4j cypher-shell -u neo4j -p "$NEO4J_PASSWORD" \
+  "MATCH (n) RETURN labels(n)[0] AS label, count(*) ORDER BY count(*) DESC;"
+```
+
+You want 14 documents at `INDEXED`, non-zero Qdrant chunk and entity points, and Neo4j holding
+`Document`, `Chunk`, `Entity` nodes.
+
+**Neo4j entity count will exceed Qdrant's, and that is correct.** Neo4j keeps alias entities as
+nodes — `add_alias` never deletes the loser, which is the auditability guarantee in BLUEPRINT §3.5 —
+while Qdrant only holds canonical name vectors. The difference should equal the alias count exactly:
+
+```bash
+docker compose exec -T neo4j cypher-shell -u neo4j -p "$NEO4J_PASSWORD" \
+  "MATCH (:Entity)-[:ALIAS_OF]->(:Entity) RETURN count(*) AS aliases;"
+docker compose exec -T neo4j cypher-shell -u neo4j -p "$NEO4J_PASSWORD" \
+  "MATCH (e:Entity) WHERE NOT (e)-[:ALIAS_OF]->() RETURN count(e) AS canonical;"
+```
+
+`canonical` must equal the Qdrant entity point count. If it doesn't, entities were written to one
+store and not the other — that is a real gap, not the expected alias difference. **If any store is zero while the others aren't, stop** — that
+is the inconsistency that wasted the last attempt, and a golden set built on it wastes the effort
+again.
+
+### If a document fails or stalls
+
+Round 6 added the recovery command, so this is no longer a five-step manual procedure:
+
+```bash
+uv run graphrag ingest --force corpus/<the-failed-file>
+```
+
+It purges the ledger row, clears the retained arq keys, and re-enqueues. It refuses a document at
+`INDEXED` unless you also pass `--even-if-indexed`.
+
+What it costs: full extraction quota for that document again — there's no chunk-level resumption.
+Embeddings are *not* recomputed, since `chunk_sources` survives the purge, so the re-run is cheaper
+than the first.
+
+If a stall doesn't resolve and doesn't fail either, check the worker is alive at all before forcing
+anything:
+
+```bash
+docker compose logs --tail=100 worker
+docker compose restart worker      # the known wedge; see the entry further down
+```
+
+---
+
+## Recovering from an interrupted ingest (power cut, OOM, docker restart)
+
+A hard kill is different from a job timeout. Round 6's cancellation handler only fires on arq's own
+`job_timeout`; a SIGKILL or a power cut gives the process no chance to write anything. So documents
+are left at whatever in-progress status they held — `PARSING`, `EMBEDDING`, `EXTRACTING`,
+`RESOLVING` — with nothing to detect or re-drive them.
+
+### 1. See what survived
+
+```bash
+cd ~/projects/GraphRAG
+docker compose up -d && docker compose ps --all
+
+docker compose exec -T postgres psql -U graphrag -d graphrag -c \
+  "SELECT status, count(*) FROM documents GROUP BY status ORDER BY 2 DESC;"
+
+docker compose exec -T postgres psql -U graphrag -d graphrag -c \
+  "SELECT doc_id, status, error_code, uri FROM documents WHERE status <> 'INDEXED' ORDER BY updated_at;"
+```
+
+Anything at `INDEXED` is complete and safe. Everything else needs forcing — **including rows that
+look mid-flight**, because no worker is coming back for them.
+
+### 2. Force each one
+
+```bash
+uv run graphrag ingest --force corpus/<file>
+```
+
+One at a time, watching the status query between each. It purges the ledger row, clears the retained
+arq keys, and re-enqueues. `chunk_sources` survives, so embeddings already paid for are not
+recomputed — only extraction is re-run.
+
+### 3. If the queue itself looks wrong
+
+Redis may hold orphaned in-progress keys from jobs that died mid-execution:
+
+```bash
+docker compose exec -T redis redis-cli --no-raw eval "
+local m=redis.call('ZCARD','arq:queue')
+local ip=#redis.call('KEYS','arq:in-progress:*')
+return 'queued='..m..' in_flight='..ip" 0
+```
+
+`in_flight` above zero with no worker running means stale keys. `--force` clears them per document;
+if the count doesn't drop, the remaining ones belong to documents you haven't forced yet.
+
+---
+
+## Rate limits are NOT enforced by default — read this before tuning anything
+
+### What `tpm` and `rpm` in `litellm/config.yaml` actually do
+
+Nothing, as currently configured. Per LiteLLM's own documentation, `rpm` and `tpm` on a deployment
+are **only used for routing decisions** — choosing between deployments in the same model group.
+They become hard limits only when `enforce_model_rate_limits` is added to
+`router_settings.optional_pre_call_checks`. It isn't set here.
+
+So `tpm: 4000` and `rpm: 15` are advisory. Nothing throttles.
+
+### Even when enforced, TPM is best-effort — and that matters at our sizes
+
+Token count isn't known until the model responds. TPM is checked *before* a request (blocking only
+if already over budget) and recorded *after*. So N concurrent requests all pass the check, then all
+add their tokens. Requests already in flight when the budget runs out are never blocked.
+
+Worse, LiteLLM documents this directly: if the configured TPM is smaller than a typical single
+response, one request blows the whole budget and enforcement degenerates to roughly one request per
+window. A bulk extraction call is ~4,800 prompt tokens with `max_tokens: 32000` against an 8,000
+TPM Groq key — a single call can exceed the entire minute.
+
+RPM is different and more reliable, because request count *is* known before the call. If RPM has
+been holding, that's not luck — four concurrent documents running sequential batches simply don't
+reach 30 requests a minute.
+
+Aggregation: one `litellm` container means one set of in-memory counters, shared across all four
+worker tasks. It would aggregate correctly. It just isn't counting.
+
+### Why Groq is being hit during ingestion at all
+
+Extraction uses the `bulk` role → `bulk-high-tpm` → Gemini flash-lite. The only path to Groq is:
+
+```yaml
+fallbacks:
+    - bulk-high-tpm: [fast-low-latency]
+```
+
+So Gemini is failing or rate-limiting, and extraction falls back onto a Groq key that cannot absorb
+a 32k-`max_tokens` extraction request. **That fallback target is unsuitable for that workload.** It
+turns a transient Gemini problem into a Groq TPM cascade, and Groq is also the `router` and `grader`
+role — so a bulk fallback storm degrades querying too.
+
+### Before changing anything: confirm what the gateway actually loaded
+
+`litellm/config.yaml` is **bind-mounted**. Editing it changes the file inside the container
+immediately and changes the running router not at all — LiteLLM parses the config once at startup.
+So an edited model, timeout or `reasoning_effort` does nothing until:
+
+```bash
+docker compose restart litellm
+```
+
+Not a rebuild. But not nothing either, and this has bitten more than once.
+
+**Always verify against the gateway rather than the file:**
+
+```bash
+export $(grep -E "^LITELLM_MASTER_KEY=" .env | xargs)
+curl -s http://localhost:4000/model/info -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  | python3 -c "
+import json, sys
+for m in json.load(sys.stdin)['data']:
+    p = m.get('litellm_params', {})
+    print(f\"{m['model_name']:<20} {p.get('model'):<40} timeout={p.get('timeout')} \"
+          f\"rpm={p.get('rpm')} tpm={p.get('tpm')} reasoning={p.get('reasoning_effort')}\")
+"
+```
+
+If that prints `gemini-3.5-flash` while the file says `gemini-3.5-flash-lite`, the container is
+running a stale config — restart it. The file is what you intend; `/model/info` is what is true.
+
+**Also note the free-tier limits differ between the two models.** They are not interchangeable from
+a quota standpoint, and a provider-side `RPM 6/5` message is Gemini's own limit being hit — nothing
+to do with the `rpm:` value in your config, which as established isn't enforced and is set to a
+number the free tier never permitted anyway. When you switch models, look up that model's actual
+free-tier RPM/TPM and set the config to match; wrong numbers become live the moment enforcement is
+turned on.
+
+### What to change, in priority order
+
+**1. Give bulk a Gemini fallback instead of a Groq one.** You have two Gemini keys on separate
+accounts. Add a second `bulk-high-tpm` deployment using `GEMINI_API_KEY_2`; same model group, so the
+router load-balances and fails over within Gemini. Then either drop the `fast-low-latency` fallback
+for bulk entirely, or leave it as a last resort *after* the second Gemini deployment.
+
+**2. Correct the tpm values.** They were set to 4000 each on the assumption that two Groq keys shared
+one organisation's 8,000 TPM. Separate accounts means 8,000 each. Same for Gemini. Wrong numbers
+matter once enforcement is on, and not before.
+
+**3. Turn enforcement on:**
+
+```yaml
+router_settings:
+  optional_pre_call_checks:
+    - enforce_model_rate_limits
+```
+
+Expect 429s from the *gateway* now rather than the provider. That's an improvement — round 6 made
+`RateLimited` retry with backoff via `arq.worker.Retry`, so a gateway 429 defers the job instead of
+killing the document.
+
+**4. Reduce ingestion concurrency.** `ingestion.parallelism.max_concurrent_docs: 4` with per-call
+token counts this large is the reason the pre-call check can't help. Dropping to 2 halves the
+in-flight overshoot. This is the lever that actually works given best-effort TPM.
+
+**Order matters — it is not just tidiness.** LiteLLM's fallback chain fires on 429s *including ones
+the gateway generates itself*. So enabling `enforce_model_rate_limits` while
+`bulk-high-tpm: [fast-low-latency]` is still in place would send bulk to Groq **more** often, not
+less — amplifying the exact cascade you are trying to stop. Fallback first, enforcement after.
+
+**No code changes are needed for any of this.** Round 6 already wired the app side: a 429 becomes
+`arq.worker.Retry` with backoff honouring `Retry-After`, so a gateway 429 and a provider 429 are
+handled identically — the job defers and retries rather than dying.
+
+### The simplest thing that works: turn concurrency down
+
+Before doing any of the above, consider that this is a **one-time ingest of 14 documents**. The
+binding constraint is RPM, not TPM — a provider message like `RPM 6/5` means the 6th request hit a
+5-per-minute ceiling. 23 bulk calls at that rate is roughly five minutes of wall time however you
+arrange them. Concurrency buys nothing here except the overshoot you're fighting, because
+best-effort TPM cannot stop concurrent requests from all passing the pre-call check together.
+
+```yaml
+# config/base.yaml
+ingestion:
+  parallelism:
+    max_concurrent_docs: 1
+```
+
+Restart the worker, run one document, and see whether the 429s stop. If they do, you're done — no
+gateway changes, no enforcement, no second deployment. Add those only if 429s persist at
+concurrency 1, which would mean a single document's own sequential batches are outpacing the
+provider limit and the fix belongs elsewhere.
+
+Change one at a time and re-run one document between each. Several of these interact, and changing
+them together makes it impossible to tell which one helped.
+
+---
+
+## Collecting `gold_chunk_ids` — method and rules
+
+### The rule that matters most
+
+**Gold ids come from the corpus, never from the retriever.** A script that fills
+`gold_chunk_ids` with whatever retrieval returned makes `NonLLMContextRecall` ~1.0 by
+construction and the eval measures nothing. It is the same failure the BO-07 blocking fixture
+rule forbids — labelling the answer key from the component being graded. Retrieval-assisted
+selection is fine; retrieval-*decided* selection is not.
+
+### The tool
+
+`fill_gold_chunks.py` at the repo root:
+
+```bash
+uv run python fill_gold_chunks.py
+```
+
+Per item it runs one vector query, pulls each returned chunk's **full text from Qdrant's JSON
+payload** (not from the CLI, which prints a truncated preview, and not from `cypher-shell
+--format plain`, whose multi-line output defeats line-based parsing), and opens them in your
+editor numbered in retrieval-rank order so you can Ctrl-F. You type the numbers that actually
+contain the answer.
+
+- Writes `eval_001.filled.yaml`; never touches the original.
+- Resumable — filled items are skipped, so Ctrl-C is safe.
+- `unanswerable` items are handled with no query: `gold_chunk_ids: []`, `gold_answer: null`,
+  `must_refuse: true`.
+- Paces at 4s/item (~15 RPM against a 30 RPM ceiling).
+- `EDITOR=none` disables the editor; `p` at the prompt prints raw output instead.
+
+### When retrieval doesn't return the right chunk
+
+That is a finding, not an obstacle. Find the chunk by text instead — Neo4j stores full chunk
+text (the BO-08 decision that keeps the graph path alive during a Qdrant outage):
+
+```bash
+gc() {
+  docker compose exec -T neo4j cypher-shell -u neo4j -p "$NEO4J_PASSWORD" \
+    "MATCH (c:Chunk) WHERE toLower(c.text) CONTAINS toLower('$1')
+     RETURN c.chunk_id AS id, substring(c.text, 0, 250) AS preview;"
+}
+gc "Fort Collins"
+```
+
+Three outcomes, three meanings:
+
+- **Text search finds it, retrieval didn't** → that is the correct gold id, and you have
+  documented a real retrieval failure. These are the most valuable items in the set; the eval
+  will score Recall 0 on them, honestly.
+- **Text search finds nothing** → the fact isn't in the corpus. Either `gold_answer` is wrong
+  or the item belongs in `unanswerable`.
+- **Found in an unexpected chunk** → your mental model of the chunking is off; use the id it
+  gives.
+
+Ids found this way must be added by editing the YAML directly — the script only offers what
+retrieval returned.
+
+### When several chunks can answer the same question
+
+Distinguish two cases, because they take opposite treatment.
+
+**Complementary — you need all of them.** A `multi_hop` question whose answer is assembled from
+chunk A *and* chunk B. **List all of them.** Recall then measures exactly what it should: did
+retrieval find the whole evidence set.
+
+**Redundant — any one suffices.** The same fact restated in several chunks; chunk A alone
+answers it, and so does chunk B. **List only the 1–3 most direct, never every duplicate.**
+
+The reason is arithmetic. `NonLLMContextRecall` is `|retrieved ∩ gold| / |gold|`, so every id
+you add raises the denominator. List 8 redundant chunks and retrieval finding 3 scores 0.375
+despite having answered the question perfectly. This corpus makes that acute: the "About Apple"
+boilerplate appears verbatim in 8 documents, so anything answerable from boilerplate could
+accumulate 8 gold ids and score near zero for a flawless run.
+
+Two consequences worth knowing:
+
+- On a redundant item, recall reads as "how much of the available evidence was found", not "was
+  the answer findable". Those differ, and only the second is usually what you mean.
+- A question answerable from widely duplicated text is weak for measuring *retrieval* at all.
+  It still tests answer correctness and citation validity. If you have several such items,
+  prefer questions whose evidence sits in one identifiable place.
+
+Sanity check when you finish: if a `multi_hop` item ended up with exactly one gold chunk, it is
+mislabelled and belongs in `single_hop`.
+
+### Finishing
+
+```bash
+# review, then promote
+mv graphrag/evaluation/golden/eval_001.filled.yaml graphrag/evaluation/golden/eval_001.yaml
+git add graphrag/evaluation/golden/ && git commit -m "eval: populate gold_chunk_ids"
+```
+
+Chunk ids are content-addressed, so they survive a re-ingest of identical text — but **not** a
+change to `chunk_size`, `chunk_overlap`, or the corpus files. If any of those change, the ids
+must be recollected. Verify a sample cheaply:
+
+```bash
+docker compose exec -T postgres psql -U graphrag -d graphrag -tAc \
+  "SELECT count(*) FROM chunk_sources WHERE chunk_id = '<one-id-from-the-set>';"
+```
+
+Zero means they are stale.
 
 ---
 
@@ -942,6 +1315,51 @@ graphrag query "the exact sentence that answers the question" --show-chunk-ids
 The 5 unanswerable items are the most valuable in the set. Make them *plausible* — the topic
 should feel like it belongs in the corpus. "What was Acme's 2019 revenue?" when the corpus only
 covers 2021–2023 is a good one. "What is the capital of Mars?" is not.
+
+#### M-5 addenda — everything learned since this section was written
+
+**Use `graphrag node`, not full queries, for `gold_route`.** A full query costs four LLM calls and
+~25s; `graphrag node plan_route --question "..."` costs one call and about a second, and prints the
+router's own strategy, seed entities and rationale. Use it to see what the router *would* do, then
+record your own judgement in `gold_route`. Those two disagreeing is a finding, not a problem — it's
+precisely what BO-11 measures.
+
+**At least 8 items must cross the two non-Apple documents.** This is the most important addition to
+the original spec. `Apple` appears in 12 of 14 documents, so every path in the Apple subset routes
+through it and graph traversal returns roughly what vector search already found. The only structure
+in this corpus that the graph leg can find and vector search cannot is a path from a non-Apple
+document to an Apple one via a shared entity. **A golden set without those items cannot distinguish
+a working graph from a broken one, and BO-11 would score a graph-free system just as highly** —
+which would leave the entire hybrid claim unmeasured. Find the bridging entities first:
+
+```bash
+docker compose exec -T neo4j cypher-shell -u neo4j -p "$NEO4J_PASSWORD" \
+  "MATCH (d:Document)-[:HAS_CHUNK]->(:Chunk)-[:MENTIONS]->(e:Entity)
+   WITH e, collect(DISTINCT d.doc_id) AS docs
+   WHERE size(docs) > 1
+   RETURN e.name, size(docs) AS doc_count ORDER BY doc_count DESC LIMIT 30;"
+```
+
+Build `multi_hop` questions on the entities that appear in both a non-Apple and an Apple document.
+
+**Include the entity-variant merges as explicit items.** Resolution merged 16 aliases into
+canonicals. Write questions that use the *non-canonical* surface form — `Apple Computer`, `Cook`,
+`Ternus` — and expect the answer that lives under the canonical. If entity linking seeds from a
+demoted alias whose vector wasn't cleaned up, these are the items that expose it. (See the open
+question about 138 Qdrant entity points against 131 canonical entities.)
+
+**Include the known regression case.** *"How did Apple manage its losses in 1997?"* with
+`gold_route: hybrid`. Under `strategy: graph` it returned an honest refusal; forcing `vector` gave a
+fully-cited correct answer. It's the clearest single test of whether routing improved.
+
+**Record which model judged each item, when BO-11 runs.** `judge-alt-vendor` intermittently 429s to
+Groq, so some items get judged by GLM and some by `gpt-oss-20b`. Without `model_served` recorded per
+judgment, a rerun won't reproduce and you'd be measuring the judge as much as the system. Cheap to
+build in, impossible to reconstruct afterwards.
+
+**Integration tests are safe to run now.** Round 3 namespaced every backend per run, so `make
+test-int` can no longer touch the ingested corpus. The old warning about keeping them apart no
+longer applies.
 
 ### M-6 · Before BO-12 — Deployment target (optional)
 Oracle Cloud **Always Free** ARM VM: 4 OCPU / 24 GB, genuinely free, fits the whole stack.

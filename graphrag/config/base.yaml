@@ -310,8 +310,8 @@ observability:
     truncate_field_chars: 1500
 
 evaluation:
-  golden_set_path: evaluation/golden/
-  smoke_subset_size: 10
+  golden_set_path: graphrag/evaluation/golden/
+  smoke_subset_size: 3
   disable_cache_during_run: true
   metrics:
     retrieval: [recall_at_k, mrr, ndcg]

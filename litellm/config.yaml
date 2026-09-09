@@ -55,10 +55,28 @@ model_list:
       timeout: 30
       rpm: 5
       tpm: 250000
+  
+  - model_name: synth-quality
+    litellm_params:
+      model: gemini/gemini-3.7-flash
+      api_key: os.environ/GEMINI_API_KEY_3
+      reasoning_effort: medium
+      timeout: 30
+      rpm: 5
+      tpm: 250000
+  
+  - model_name: synth-quality
+    litellm_params:
+      model: gemini/gemini-3.7-flash
+      api_key: os.environ/GEMINI_API_KEY_4
+      reasoning_effort: medium
+      timeout: 30
+      rpm: 5
+      tpm: 250000
 
   - model_name: judge-alt-vendor
     litellm_params:
-      model: openrouter/z-ai/glm-5.2:free
+      model: openrouter/nex-agi/nex-n2.5-pro:free
       api_key: os.environ/OPENROUTER_API_KEY_1
       rpm: 20
       tpm: 40000

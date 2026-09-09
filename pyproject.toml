@@ -37,7 +37,7 @@ dependencies = [
     # --- embeddings ---
     "fastembed==0.8.0",
     # --- llm gateway client (openai-compatible, points at the litellm proxy) ---
-    "openai==3.5.0",
+    "openai==3.3.0",
     # --- orchestration ---
     "jinja2==3.1.6",
     "langgraph==1.2.11",
@@ -57,6 +57,9 @@ dependencies = [
     # --- document parsing (BO-05) ---
     "pymupdf==1.28.2",
     "python-docx==1.2.0",
+    # --- evaluation (BO-11) ---
+    "ragas==0.4.3",
+    "langchain-core>=0.3.0",
 ]
 
 [dependency-groups]

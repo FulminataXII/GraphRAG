@@ -31,7 +31,8 @@ ALLOWED: dict[str, set[str]] = {
     "config": {"core"},
     "services": {"core", "config"},
     "adapters": {"core", "config"},
-    "apps": {"core", "config", "services", "adapters"},
+    "evaluation": {"core", "config", "services", "adapters"},
+    "apps": {"core", "config", "services", "adapters", "evaluation"},
 }
 
 

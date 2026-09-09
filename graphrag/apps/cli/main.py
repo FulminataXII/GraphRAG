@@ -849,6 +849,73 @@ def node(
     asyncio.run(_run())
 
 
+@app.command()
+def eval(
+    subset: Annotated[
+        bool,
+        typer.Option("--subset", help="Run evaluation.smoke_subset_size items for CI."),
+    ] = False,
+    report: Annotated[
+        Path | None,
+        typer.Option("--report", help="Path to write the markdown report."),
+    ] = None,
+) -> None:
+    """Run the evaluation pipeline against the golden set.
+
+    Loads the golden set, runs each item through orchestration, computes metrics, and
+    checks thresholds. Exits 1 if any metric is below evaluation.thresholds.
+    """
+    settings = cli_settings()
+
+    async def _run() -> None:
+        container = await open_container(settings)
+        try:
+            assert container.orchestrator is not None
+
+            # Import here to avoid circular imports and unnecessary dependency loading
+            from graphrag.evaluation.metrics.generation import GenerationJudge
+            from graphrag.evaluation.report import render_markdown
+            from graphrag.evaluation.runner import EvalRunner
+
+            assert container.embedder is not None
+            judge = GenerationJudge(llm_client=container.llm_client, embedder=container.embedder)
+
+            subset_size = settings.evaluation.smoke_subset_size if subset else None
+
+            runner = EvalRunner(
+                settings=settings,
+                orchestrator=container.orchestrator,
+                judge=judge,
+            )
+            eval_report = await runner.run(
+                subset=subset_size,
+                include_generation_metrics=True,
+            )
+
+            # Print summary
+            md = render_markdown(eval_report)
+            typer.echo(md)
+
+            # Write report file
+            report_path = report
+            if report_path is None:
+                report_dir = Path(settings.evaluation.report_path)
+                report_dir.mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240
+                report_path = report_dir / f"eval_{eval_report.run_id}.md"
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(md, encoding="utf-8")
+            typer.echo(f"\nreport written to {report_path}")
+
+            if not eval_report.thresholds_passed:
+                typer.echo("FAIL: one or more metrics below threshold", err=True)
+                raise typer.Exit(code=1)
+
+        finally:
+            await container.aclose()
+
+    asyncio.run(_run())
+
+
 def main() -> None:
     app()
 
