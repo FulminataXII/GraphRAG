@@ -89,6 +89,27 @@ def init_telemetry(settings: Settings, *, service_role: Literal["api", "worker",
         otel_metrics.set_meter_provider(meter_provider)
         _meter_provider = meter_provider
 
+        try:
+            from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+
+            HTTPXClientInstrumentor().instrument()
+        except ImportError:
+            pass
+
+        try:
+            from opentelemetry.instrumentation.redis import RedisInstrumentor
+
+            RedisInstrumentor().instrument()
+        except ImportError:
+            pass
+
+        try:
+            from opentelemetry.instrumentation.asyncpg import AsyncPGInstrumentor
+
+            AsyncPGInstrumentor().instrument()
+        except ImportError:
+            pass
+
         _initialized = True
     except Exception:
         _log.warning("telemetry initialization failed; degrading to no-op", exc_info=True)

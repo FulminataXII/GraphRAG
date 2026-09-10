@@ -97,6 +97,7 @@ def traced(
                         span.set_status(Status(StatusCode.ERROR, str(exc)))
                         raise
                     _maybe_record_result_len(span, result, record_result_len)
+                    _maybe_record_node_failures(span, result)
                     return result
 
             return async_wrapper  # type: ignore[return-value]
@@ -112,6 +113,7 @@ def traced(
                     span.set_status(Status(StatusCode.ERROR, str(exc)))
                     raise
                 _maybe_record_result_len(span, result, record_result_len)
+                _maybe_record_node_failures(span, result)
                 return result
 
         return sync_wrapper  # type: ignore[return-value]
@@ -124,6 +126,12 @@ def _maybe_record_result_len(span: Any, result: Any, enabled: bool) -> None:
         return
     with contextlib.suppress(TypeError):
         span.set_attribute("result_len", len(result))
+
+
+def _maybe_record_node_failures(span: Any, result: Any) -> None:
+    if isinstance(result, dict) and result.get("failures"):
+        span.set_attribute("node.has_failures", True)
+        span.add_event("node_failure_recorded")
 
 
 def counted(metric: str, *, labels: Sequence[str] = ()) -> Callable[[F], F]:
